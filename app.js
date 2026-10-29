@@ -776,6 +776,10 @@ $('#tplSelect').addEventListener('change', () => { selectTemplateId($('#tplSelec
 function renderFileNote() {
   $('#tplFileNote').hidden = !pendingFile;
   $('#tplFileName').textContent = pendingFile ? pendingFile.name : '';
+  // hwp는 브라우저에서 쓸 수 없어 hwpx로 변환해 보관하는데, 이 변환에서 표 머리 부분 등이 틀어질 수 있다
+  $('#tplFileHint').textContent = pendingFile && /\.hwp$/i.test(pendingFile.name)
+    ? 'hwp 파일은 hwpx로 변환해 보관했습니다. 변환하면서 표 머리 부분 등 서식이 달라질 수 있습니다. 한글에서 [다른 이름으로 저장 → HWPX]로 저장한 파일을 올리면 원본 서식 그대로 채워집니다.'
+    : '결과 화면에서 [한글 파일]로 받으면 이 파일의 서식(표·글꼴·로고) 그대로 채워집니다. 칸 안의 글자만 바뀝니다.';
 }
 function openEditor(t) {
   editingId = t ? t.id : null;
@@ -842,7 +846,8 @@ $('#tplFile').addEventListener('change', async e => {
     pendingFile = res.hwpx ? { name: f.name, hwpx: bytesToB64(res.hwpx) } : null;
     renderFileNote();
     if (!$('#tplName').value.trim()) $('#tplName').value = f.name.replace(/\.[^.]+$/, '').slice(0, 60);
-    toast(res.hwpx ? '불러왔습니다. 한글 서식도 함께 보관합니다' : '불러왔습니다. 필요한 부분을 고친 뒤 저장하세요');
+    toast(!res.hwpx ? '불러왔습니다. 필요한 부분을 고친 뒤 저장하세요'
+      : /\.hwp$/i.test(f.name) ? '불러왔습니다. 서식을 원본 그대로 쓰려면 hwpx로 저장해 올리세요' : '불러왔습니다. 한글 서식도 함께 보관합니다');
   } catch (err) {
     console.log('[회의록] 양식 파일 읽기 실패', err);
     toast(`파일을 읽지 못했습니다: ${err.message}. 내용을 복사해 붙여넣어 주세요`);
