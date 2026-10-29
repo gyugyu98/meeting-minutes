@@ -337,7 +337,12 @@ const MINUTES_SCHEMA = {
   properties: {
     title: { type: 'STRING' },
     topic: { type: 'STRING' },
-    agendas: { type: 'ARRAY', items: { type: 'OBJECT', properties: { title: { type: 'STRING' }, points: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['title', 'points'] } },
+    // 안건마다 한 줄 요약 + 발언자별 의견 묶음 (여러 사람 의견이 한 목록에 섞이지 않게)
+    agendas: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
+      title: { type: 'STRING' },
+      summary: { type: 'STRING' },
+      opinions: { type: 'ARRAY', items: { type: 'OBJECT', properties: { speaker: { type: 'STRING' }, points: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['speaker', 'points'] } },
+    }, required: ['title', 'summary', 'opinions'] } },
     conclusions: { type: 'ARRAY', items: { type: 'STRING' } },
     undecided: { type: 'ARRAY', items: { type: 'STRING' } },
     tasks: { type: 'ARRAY', items: { type: 'OBJECT', properties: { text: { type: 'STRING' }, owner: { type: 'STRING' }, due: { type: 'STRING' } }, required: ['text', 'owner', 'due'] } },
@@ -350,10 +355,13 @@ const MINUTES_SCHEMA = {
 const STYLE_RULE = `- 문장은 개조식으로 끝맺습니다. "~함", "~음", "~임" 또는 명사로 끝내고 "~습니다", "~했다", "~이다"는 쓰지 않습니다. 예: "9월까지 시스템 설계 상세화 확정 예정임", "데이터 양은 설계 인자 위주라 많지 않음", "수리계산 템플릿 정밀화 필요", "벡터 DB 파일럿 진행".`;
 
 const LEVELS = {
-  '간단': mins => `안건마다 주요 의견과 그 근거를 points 2~4개로 씁니다. 각 항목은 1~2문장이고, 누구의 의견인지 화자 표기를 넣습니다. 전체 points는 ${Math.max(4, Math.round(mins * 0.3))}개 안팎입니다.`,
-  '보통': mins => `안건마다 논의 흐름을 순서대로 씁니다. 누가 어떤 의견을 냈고, 어떤 반론과 근거가 오갔고, 어떻게 결론에 이르렀는지 담습니다. 각 항목은 1~3문장이고, 언급된 숫자·일정·이름·대안은 그대로 남깁니다. 전체 points는 최소 ${Math.max(8, Math.round(mins * 0.7))}개입니다.`,
-  '자세히': mins => `대화록을 읽지 않은 사람이 회의 내용을 거의 다 알 수 있을 만큼 촘촘하게 씁니다. 안건을 잘게 나누고, 안건마다 발언 순서를 따라 각 발언자의 주장, 근거, 예시, 질문과 답변, 반론, 의견이 바뀐 과정, 결론에 이른 이유를 빠짐없이 적습니다. 언급된 숫자·일정·이름·사례·대안·우려 사항은 모두 남깁니다. 각 항목은 2~3문장입니다. 전체 points는 최소 ${Math.max(15, Math.round(mins * 1.5))}개이며, 내용이 더 있으면 더 써도 됩니다. 요약하느라 내용을 빼지 마세요.`,
+  '간단': mins => `발언자마다 핵심 의견과 근거만 1~2개 씁니다. 전체 의견 항목은 ${Math.max(4, Math.round(mins * 0.3))}개 안팎입니다.`,
+  '보통': mins => `발언자마다 의견, 근거, 반론, 질문과 답변을 씁니다. 언급된 숫자·일정·이름·대안은 그대로 남깁니다. 전체 의견 항목은 최소 ${Math.max(8, Math.round(mins * 0.7))}개입니다.`,
+  '자세히': mins => `대화록을 읽지 않은 사람이 회의 내용을 거의 다 알 수 있을 만큼 촘촘하게 씁니다. 안건을 잘게 나누고, 발언자마다 주장, 근거, 예시, 질문과 답변, 반론, 의견이 바뀐 과정을 빠짐없이 적습니다. 언급된 숫자·일정·이름·사례·대안·우려 사항은 모두 남깁니다. 전체 의견 항목은 최소 ${Math.max(15, Math.round(mins * 1.5))}개이며, 내용이 더 있으면 더 써도 됩니다. 요약하느라 내용을 빼지 마세요.`,
 };
+// 읽기 쉬운 논의 구성: 안건 → 발언자 → 한 가지 내용씩 짧은 항목
+const READ_RULE = `- 논의 내용은 안건별로 나누고, 안건 안에서는 발언자별로 묶습니다. 한 항목에는 한 사람의 한 가지 내용만 씁니다. 여러 사람의 의견을 한 항목에 섞지 않습니다.
+- 항목은 짧게 끊어 씁니다(한 항목에 1~2문장). 질문과 답변은 묻는 사람 묶음에 "~ 질문", 답한 사람 묶음에 "~ 답변"으로 나눠 씁니다.`;
 // 회의 길이(분). 녹음 길이를 모르면 대화록 글자 수로 어림한다(한국어 말 1분 ≈ 300자).
 function meetingMinutes(text) { return job.duration > 0 ? job.duration / 60 : text.length / 300; }
 
@@ -415,11 +423,15 @@ function summarize(level, first, useModel, onProgress) {
 - 양식의 제목·소제목·항목 이름과 순서를 그대로 지킵니다. 양식에 없는 큰 제목을 새로 만들지 않습니다. 양식에 맞는 자리가 없는 중요한 내용은 가장 가까운 항목에 넣습니다.
 - 양식 안의 괄호 설명, 예시 문구, 빈칸 표시(○○, ___, "내용" 같은 자리 표시)는 그 칸에 무엇을 쓸지 알려주는 지침입니다. 실제 내용으로 바꿔 쓰고 지침 문구는 남기지 않습니다.
 - 양식이 이전 회의를 기록한 회의록이면, 그 내용(날짜·참석자·논의 내용)은 형식 참고용일 뿐이니 가져오지 말고 이번 회의 대화록으로 새로 씁니다. 발표자별로 묶는 형식이면 이번 회의의 화자별로 묶습니다.
-- 양식이 표인 곳은 마크다운 표로, 목록인 곳은 목록으로, 체크박스인 곳은 "- [ ]"로 씁니다. 표의 행 수는 내용에 맞게 늘리거나 줄입니다.
+- "- 일시: 값"처럼 머리 항목과 값으로 된 줄은 머리 항목은 그대로 두고 값만 이번 회의 것으로 바꿉니다. 문서 제목(# 줄)은 그대로 둡니다.
+- 양식의 내용 구성(예: "## 1. 회의 목적" 아래 목록, 발표자 소제목(###) 아래 굵은 안건과 하위 세부 내용)은 그 모양 그대로 따릅니다. 발표자 소제목 자리에는 이번 회의의 화자를 씁니다.
+- 양식이 표인 곳은 마크다운 표로, 목록인 곳은 목록으로 씁니다. 표의 행 수는 내용에 맞게 늘리거나 줄입니다.
+- 할 일은 양식에 따로 표가 없으면 "- [ ] 할 일 (담당, 기한)" 체크박스 목록으로 씁니다.
 - 대화록에서 확인할 수 없는 항목(장소 등)은 지어내지 말고 "-"로 둡니다.
 - 사람을 가리킬 때는 화자 표기(화자1, 화자2 …)를 그대로 씁니다.
 ${STYLE_RULE}
-- 논의 내용 분량: ${LEVELS[level](meetingMinutes(transcript)).replace(/points/g, '논의 항목')}
+${READ_RULE}
+- 논의 내용 분량: ${LEVELS[level](meetingMinutes(transcript))}
 - 할 일은 회의 중에 누군가 하겠다고 했거나 누구에게 맡긴 일만 씁니다. ${date ? '"다음 주 화요일"처럼 상대적인 기한은 회의 일시를 기준으로 MM/DD로 바꾸고 괄호 안에 원래 표현을 남깁니다.' : ''}
 - title: ${job.meta.title ? `"${job.meta.title}" 를 그대로 씁니다.` : '회의 내용을 나타내는 짧은 제목입니다.'} 양식에 회의 제목 자리가 있으면 그 자리에도 씁니다.
 ${date} ${people}
@@ -440,7 +452,8 @@ ${transcript}`;
 ${STYLE_RULE}
 - title: ${job.meta.title ? `"${job.meta.title}" 를 그대로 씁니다.` : '회의 내용을 나타내는 짧은 제목입니다.'}
 - topic: 회의의 목적과 주제를 ${level === '간단' ? '1~2' : '2~3'}문장으로 씁니다.
-- agendas: 다룬 안건별로 나눕니다. ${LEVELS[level](meetingMinutes(transcript))}
+- agendas: 다룬 안건별로 나눕니다. 안건마다 summary에 논의 결과를 한 문장으로 쓰고, opinions에 발언자별로 의견을 묶습니다(speaker는 화자 표기, points는 그 사람의 의견 항목들). ${LEVELS[level](meetingMinutes(transcript))}
+${READ_RULE}
 - conclusions: 회의에서 합의되거나 결정된 사항만 씁니다. 추측해서 만들지 않습니다.
 - undecided: 결론이 나지 않았거나 다음으로 미룬 안건입니다. 없으면 빈 배열입니다.
 - tasks: 회의 중에 누군가 하겠다고 했거나 누구에게 맡긴 일만 넣습니다. owner는 화자 표기, 맡은 사람이 분명하지 않으면 빈 문자열입니다. due는 말한 기한이고, 없으면 빈 문자열입니다. ${date ? '"다음 주 화요일"처럼 상대적인 기한은 회의 일시를 기준으로 MM/DD로 바꾸고 괄호 안에 원래 표현을 남깁니다.' : ''}
@@ -546,9 +559,21 @@ function renderMinutes(m) {
   $('#topic').textContent = sub(m.topic);
   const disc = $('#discussion');
   disc.replaceChildren();
+  // 안건 제목 → 한 줄 요약 → 발언자(굵게)별 의견 목록
   (m.agendas || []).forEach(a => {
     if (a.title) { const h = document.createElement('h4'); h.textContent = sub(a.title); disc.append(h); }
-    disc.append(listOf(a.points));
+    if (a.summary) { const p = document.createElement('p'); p.className = 'agenda-summary'; p.textContent = sub(a.summary); disc.append(p); }
+    if (a.opinions?.length) {
+      const ul = document.createElement('ul');
+      a.opinions.forEach(o => {
+        const li = document.createElement('li');
+        const b = document.createElement('strong');
+        b.textContent = speakerName(o.speaker);
+        li.append(b, listOf(o.points));
+        ul.append(li);
+      });
+      disc.append(ul);
+    } else if (a.points) disc.append(listOf(a.points));   // 이전 형식
   });
   $('#conclusion').replaceChildren(...listOf(m.conclusions).children);
   const und = m.undecided || [];
@@ -643,21 +668,17 @@ $$('[data-tab]').forEach(b => b.addEventListener('click', () => selectTab(b.data
 
 /* 복사 */
 function bullets(el) { return [...el.querySelectorAll('li')].map(li => '- ' + li.textContent.trim()).filter(l => l !== '- ').join('\n'); }
+// 논의 과정: 안건(###) → 요약 → 발언자(굵게) → 하위 목록. 화면에서 고친 중첩 목록도 그대로 옮긴다.
 function discussionMd() {
-  const out = [];
-  [...$('#discussion').children].forEach(el => {
-    if (/^H\d$/.test(el.tagName)) out.push(`\n### ${el.textContent.trim()}`);
-    else if (el.tagName === 'UL' || el.tagName === 'OL') out.push(bullets(el));
-    else if (el.textContent.trim()) out.push(el.textContent.trim());
-  });
-  if (!out.length && $('#discussion').textContent.trim()) out.push($('#discussion').textContent.trim());
-  return out.join('\n').trim();
+  return htmlToMd($('#discussion')).replace(/^#{4,6} /gm, '### ');
 }
-function minutesMd(notion) {
+// Task는 노션에서 할 일 목록(체크박스)으로 들어가도록 표 대신 "- [ ]" 목록으로 낸다
+function minutesMd() {
   const live = tasks.filter(t => t.text.trim());
-  const taskLines = !live.length ? '- 없음' : notion
-    ? live.map(t => `- [${t.done ? 'x' : ' '}] ${t.text}${t.who ? ` · ${t.who}` : ''}${t.due ? ` · ${t.due}` : ''}`).join('\n')
-    : ['| 완료 | 할 일 | 담당 | 기한 |', '|---|---|---|---|', ...live.map(t => `| ${t.done ? '✓' : ''} | ${cellMd(t.text)} | ${cellMd(t.who)} | ${cellMd(t.due)} |`)].join('\n');
+  const taskLines = !live.length ? '- 없음' : live.map(t => {
+    const meta = [t.who && `담당 ${t.who}`, t.due && `기한 ${t.due}`].filter(Boolean).join(', ');
+    return `- [${t.done ? 'x' : ' '}] ${t.text}${meta ? ` (${meta})` : ''}`;
+  }).join('\n');
   const und = bullets($('#undecided'));
   return `# ${$('#docTitle').value.trim()}
 
@@ -914,8 +935,18 @@ $('#hwpxBtn').addEventListener('click', async () => {
   }
 });
 
+// 예전 방식으로 읽어 둔 한글 양식(표를 마크다운 표로 옮긴 것)은 새 방식(머리 항목 + 내용 구성)으로 다시 읽는다
+async function migrateTemplates() {
+  for (const t of loadTemplates()) {
+    if (!t.file || !/\(아래 내용\)|^\|/m.test(t.body)) continue;
+    try { upsertTemplate({ ...t, body: (await hwpxToMd(b64ToBytes(t.file.hwpx))).trim() }); }
+    catch (e) { console.log('[회의록] 양식 다시 읽기 실패', t.name, e); }
+  }
+}
+
 /* ---------- 시작 ---------- */
 resetUpload();
 renderKey();
 renderTplSelect();
+migrateTemplates();
 go(key() ? 'upload' : 'key');

@@ -147,6 +147,9 @@ fieldset.level legend{font-size:13px;font-weight:600;padding:0;margin-bottom:6px
 .edit:hover{background:var(--sunk)}
 .edit:focus{background:var(--accent-soft);outline:none}
 .doc ul{margin:0;padding-left:22px}
+.doc ul ul{margin:2px 0 6px;padding-left:20px;color:var(--fg)}
+.doc li > strong{display:inline-block;margin-top:4px}
+.agenda-summary{margin:2px 0 6px;color:var(--muted)}
 .doc li{margin:3px 0}
 .callout{background:var(--sunk);border-radius:8px;padding:12px 14px;margin:0}
 .tblwrap{overflow-x:auto}

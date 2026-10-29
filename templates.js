@@ -103,20 +103,55 @@ async function openHwpx(bytes) {
 }
 
 // 양식 글(마크다운)로: 표는 표로, 문단이 많은 큰 칸은 표 아래에 문단 그대로 풀어 쓴다
+// 회의록 양식은 대개 "머리글 칸 | 값 칸"이 짝을 이루는 서식표와, 내용이 여러 문단으로 들어가는 큰 칸으로 되어 있다.
+// 표를 마크다운 표로 옮기면 내용 구성("1. 회의 목적" 등)이 표의 행처럼 보여 양식이 깨지므로,
+// 머리글 칸은 "- 일시: 값" 목록으로, 큰 칸의 문단은 제목·목록이 있는 본문으로 옮긴다.
 async function hwpxToMd(bytes) {
   const { sections } = await openHwpx(bytes);
   const out = [];
+  const compact = s => s.replace(/\s+/g, '');
+  const isLabel = t => t && compact(t).length <= 6 && !/[.:,0-9]/.test(t);
   const table = tbl => {
-    const after = [];
-    const rows = kids(tbl, 'tr').map(tr => kids(tr, 'tc').map(tc => {
-      const paras = [...tc.getElementsByTagNameNS('*', 'p')].filter(p => inside(p, 'tc', null) === tc);
-      const lines = paras.map(paraText).map(s => s.replace(/\s+$/, ''));
-      if (lines.filter(l => l.trim()).length > 3) { after.push(...lines); return '(아래 내용)'; }
-      return lines.filter(l => l.trim()).join('\n');
-    }));
-    const md = mdTable(rows);
-    if (md) out.push('', md, '');
-    if (after.length) out.push(...after.map(l => l.trim() ? l : ''), '');
+    for (const tr of kids(tbl, 'tr')) {
+      const cells = kids(tr, 'tc').map(tc => {
+        const paras = kids(kids(tc, 'subList')[0] || tc, 'p');
+        const hasObject = paras.some(p => [...p.getElementsByTagNameNS('*', '*')].some(k => /^(pic|tbl|ole|equation)$/.test(k.localName)));
+        const lines = paras.map(paraText).map(s => s.replace(/\s+$/, ''));
+        const span = tc.getElementsByTagNameNS('*', 'cellSpan')[0];
+        return { lines, text: lines.filter(l => l.trim()).join(' ').trim(), many: lines.filter(l => l.trim()).length > 3, hasObject, rowSpan: +span?.getAttribute('rowSpan') || 1 };
+      });
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        if (c.many) { out.push('', ...contentLines(c.lines), ''); continue; }   // 내용 칸: 본문 구성 그대로
+        if (!c.text) continue;
+        if (c.rowSpan > 1) { out.push(`# ${c.text}`, ''); continue; }   // 여러 행을 차지하는 칸 = 문서 제목
+        if (isLabel(c.text) && k + 1 < cells.length && !cells[k + 1].many) {   // 머리글 | 값
+          out.push(`- ${compact(c.text)}: ${cells[k + 1].text}`);
+          k++;
+          continue;
+        }
+        if (isLabel(c.text) && cells.length === 1) { out.push('', `## ${compact(c.text)}`); continue; }   // 한 줄을 다 차지하는 머리글(예: 내 용)
+        out.push(c.text);
+      }
+    }
+    out.push('');
+  };
+  // 내용 칸 문단: "1. 회의 목적" → 제목, "- 항목" → 목록, ": 세부" → 하위 목록, 짧은 이름 줄(발표자·팀) → 소제목
+  const contentLines = lines => {
+    const res = [];
+    for (const raw of lines) {
+      const l = raw.trim();
+      if (!l) { res.push(''); continue; }
+      const [first, ...rest] = l.split('\n').map(s => s.trim()).filter(Boolean);
+      const detail = rest.map(s => '  - ' + s.replace(/^[:\-•·▪○◦]\s*/, ''));
+      if (/^\d+[.)]\s*\S/.test(first)) res.push(`## ${first}`);
+      else if (/^[-•·▪○◦]\s*/.test(first)) res.push(rest.length ? `- **${first.replace(/^[-•·▪○◦]\s*/, '')}**` : `- ${first.replace(/^[-•·▪○◦]\s*/, '')}`);
+      else if (/^:\s*/.test(first)) res.push('  - ' + first.replace(/^:\s*/, ''));
+      else if (first.length <= 15 && !/[.,:;!?]/.test(first)) res.push(`### ${first}`);
+      else res.push(first);
+      res.push(...detail);
+    }
+    return res;
   };
   const walk = el => {
     for (const c of el.children) {
