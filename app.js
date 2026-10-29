@@ -570,7 +570,8 @@ function showResult() {
 function renderMinutes(m) {
   $('#pLevel').textContent = job.meta.level;
   $('#pStyle').textContent = styleOf();
-  $('#pTemplate').textContent = job.meta.template ? job.meta.template.name : '기본 양식';
+  $('#pTemplate').textContent = !job.meta.template ? '기본 양식'
+    : job.meta.template.name + (job.meta.template.file ? ` (${job.meta.template.file.kind === 'hwpx' ? '한글' : '워드'} 서식 포함)` : ' (서식 파일 없음)');
   $('#redoLevel').value = job.meta.level;
   $('#redoStyle').value = styleOf();
   renderRedoTemplates();
@@ -887,10 +888,11 @@ $('#tplFile').addEventListener('change', async e => {
 // 어떤 양식이든 기본 서식의 워드·한글 파일과 마크다운 파일로도 받을 수 있다.
 function renderDownloadBtn() {
   const kind = job?.meta.template?.file?.kind;
+  // 서식 파일이 있으면 "회사 양식에 채우기"를 맨 위에 두고, 같은 형식의 기본 서식은 헷갈리지 않게 뺀다
   const opts = [
-    ...(kind ? [['template', `양식 그대로 (.${kind})`]] : []),
-    ['docx', '워드 (.docx)'], ['hwpx', '한글 (.hwpx)'], ['md', '마크다운 (.md)'],
-  ];
+    ...(kind ? [['template', `회사 양식에 채우기 (.${kind})`]] : []),
+    ['docx', '기본 서식 워드 (.docx)'], ['hwpx', '기본 서식 한글 (.hwpx)'], ['md', '마크다운 (.md)'],
+  ].filter(([v]) => v !== kind);
   const prev = $('#dlFormat').value;
   $('#dlFormat').innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
   $('#dlFormat').value = kind ? 'template' : (opts.some(o => o[0] === prev) ? prev : 'docx');
