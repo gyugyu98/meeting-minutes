@@ -119,6 +119,24 @@ fieldset.level legend{font-size:13px;font-weight:600;padding:0;margin-bottom:6px
 .props dd{margin:0;min-width:0}
 .redo{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .redo .btn{padding:2px 8px;font-size:13px}
+.redo-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.redo-bar b{color:var(--fg);font-weight:600}
+.tpl-editor{display:grid;gap:14px}
+.tpl-editor h3{font-size:16px}
+.tpl-body{font-family:var(--mono);font-size:13px;line-height:1.55;resize:vertical;min-height:220px}
+.mini-btn{padding:4px 10px;font-size:13px}
+.btn.danger{color:var(--rec)}
+.custom-doc{margin:0;padding:28px clamp(16px,4vw,40px)}
+.custom-doc h1{font-size:26px;margin:0 0 12px}
+.custom-doc h2{font-size:19px;margin:26px 0 8px}
+.custom-doc h3{font-size:16px;margin:18px 0 6px}
+.custom-doc h4,.custom-doc h5,.custom-doc h6{font-size:15px;margin:14px 0 4px}
+.custom-doc p{margin:6px 0}
+.custom-doc ul,.custom-doc ol{margin:4px 0;padding-left:22px}
+.custom-doc table{margin:8px 0;display:block;overflow-x:auto}
+.custom-doc th,.custom-doc td{border:1px solid var(--line)}
+.custom-doc blockquote{margin:8px 0;padding:8px 12px;background:var(--sunk);border-radius:8px}
+.custom-doc hr{border:0;border-top:1px solid var(--line);margin:18px 0}
 .doc h3{font-size:17px;margin:26px 0 8px}
 .doc h4,.doc .sub{font-size:15px;margin:14px 0 4px}
 .edit{border-radius:6px;padding:2px 4px;margin:0 -4px}

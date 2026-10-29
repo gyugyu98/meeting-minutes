@@ -31,7 +31,10 @@ function newJob(file, duration) {
   return {
     file, duration, ranges: makeRanges(duration), stats: [],
     audio: null,     // 30분 넘는 녹음을 자르려고 브라우저에서 풀어둔 소리
-    meta: { title: $('#mTitle').value.trim(), date: $('#mDate').value, people: splitPeople($('#mPeople').value), level: $('input[name=level]:checked').value },
+    meta: {
+      title: $('#mTitle').value.trim(), date: $('#mDate').value, people: splitPeople($('#mPeople').value), level: $('input[name=level]:checked').value,
+      template: loadTemplates().find(t => t.id === $('#tplSelect').value) || null,   // null이면 기본 양식
+    },
     segments: [], minutes: null, names: {},
   };
 }
@@ -390,6 +393,39 @@ function summarize(level, first, useModel, onProgress) {
 - 회의록 본문에서 사람을 가리킬 때는 회의 전체 번호(화자1, 화자2 …)를 씁니다.
 ` : '';
   const date = job.meta.date ? `회의 일시는 ${job.meta.date.replace('T', ' ')}입니다.` : '';
+  const mapSchema = { speakerMap: { type: 'ARRAY', items: { type: 'OBJECT', properties: { local: { type: 'STRING' }, global: { type: 'STRING' } }, required: ['local', 'global'] } } };
+  const opts = {
+    thinking: 'low',
+    onText: text => { setSub('min', `작성 중 · ${text.length.toLocaleString()}자`); onProgress?.(text.length); },
+    onStats: st => addStat(`${first ? '회의록 정리' : `다시 정리(${level})`} (${useModel})`, st),
+  };
+
+  // 사용자 양식: 양식의 구조를 그대로 지킨 마크다운 한 덩어리로 받는다
+  const tpl = job.meta.template;
+  if (tpl) {
+    const people = job.meta.people.length ? `참석자는 ${job.meta.people.join(', ')}입니다.` : '참석자는 대화록의 화자들입니다.';
+    const tplPrompt = `아래 [회의록 양식]에 맞춰 회의 대화록으로 회의록을 작성하세요. 회의록은 markdown 필드에 마크다운으로 씁니다.${mapRule}
+- 양식의 제목·소제목·항목 이름과 순서를 그대로 지킵니다. 양식에 없는 큰 제목을 새로 만들지 않습니다. 양식에 맞는 자리가 없는 중요한 내용은 가장 가까운 항목에 넣습니다.
+- 양식 안의 괄호 설명, 예시 문구, 빈칸 표시(○○, ___, "내용" 같은 자리 표시)는 그 칸에 무엇을 쓸지 알려주는 지침입니다. 실제 내용으로 바꿔 쓰고 지침 문구는 남기지 않습니다.
+- 양식이 표인 곳은 마크다운 표로, 목록인 곳은 목록으로, 체크박스인 곳은 "- [ ]"로 씁니다. 표의 행 수는 내용에 맞게 늘리거나 줄입니다.
+- 대화록에서 확인할 수 없는 항목(장소 등)은 지어내지 말고 "-"로 둡니다.
+- 사람을 가리킬 때는 화자 표기(화자1, 화자2 …)를 그대로 씁니다.
+- 논의 내용 분량: ${LEVELS[level](meetingMinutes(transcript)).replace(/points/g, '논의 항목')}
+- 할 일은 회의 중에 누군가 하겠다고 했거나 누구에게 맡긴 일만 씁니다. ${date ? '"다음 주 화요일"처럼 상대적인 기한은 회의 일시를 기준으로 MM/DD로 바꾸고 괄호 안에 원래 표현을 남깁니다.' : ''}
+- title: ${job.meta.title ? `"${job.meta.title}" 를 그대로 씁니다.` : '회의 내용을 나타내는 짧은 제목입니다.'} 양식에 회의 제목 자리가 있으면 그 자리에도 씁니다.
+${date} ${people}
+
+[회의록 양식]
+<<<
+${tpl.body}
+>>>
+
+대화록:
+${transcript}`;
+    const schema = { type: 'OBJECT', properties: { title: { type: 'STRING' }, markdown: { type: 'STRING' }, ...(multi ? mapSchema : {}) }, required: ['title', 'markdown', ...(multi ? ['speakerMap'] : [])] };
+    return generateJSON(key(), useModel, [{ text: tplPrompt }], schema, opts);
+  }
+
   const prompt = `아래 회의 대화록으로 회의록을 작성하세요.${mapRule}
 - 사람을 가리킬 때는 화자 표기(화자1, 화자2 …)를 그대로 씁니다.
 - title: ${job.meta.title ? `"${job.meta.title}" 를 그대로 씁니다.` : '회의 내용을 나타내는 짧은 제목입니다.'}
@@ -404,14 +440,10 @@ ${date}
 ${transcript}`;
   const schema = multi ? {
     ...MINUTES_SCHEMA,
-    properties: { ...MINUTES_SCHEMA.properties, speakerMap: { type: 'ARRAY', items: { type: 'OBJECT', properties: { local: { type: 'STRING' }, global: { type: 'STRING' } }, required: ['local', 'global'] } } },
+    properties: { ...MINUTES_SCHEMA.properties, ...mapSchema },
     required: [...MINUTES_SCHEMA.required, 'speakerMap'],
   } : MINUTES_SCHEMA;
-  return generateJSON(key(), useModel, [{ text: prompt }], schema, {
-    thinking: 'low',
-    onText: text => { setSub('min', `작성 중 · ${text.length.toLocaleString()}자`); onProgress?.(text.length); },
-    onStats: st => addStat(`${first ? '회의록 정리' : `다시 정리(${level})`} (${useModel})`, st),
-  });
+  return generateJSON(key(), useModel, [{ text: prompt }], schema, opts);
 }
 
 function showError(e) {
@@ -492,7 +524,13 @@ function showResult() {
 }
 function renderMinutes(m) {
   $('#pLevel').textContent = job.meta.level;
+  $('#pTemplate').textContent = job.meta.template ? job.meta.template.name : '기본 양식';
   $('#redoLevel').value = job.meta.level;
+  if (m.markdown != null) {   // 사용자 양식: 양식 모양 그대로 그려서 그 자리에서 고치게 한다
+    $('#customDoc').innerHTML = mdToHtml(sub(m.markdown));
+    dirty = false; resetRedo();
+    return;
+  }
   $('#topic').textContent = sub(m.topic);
   const disc = $('#discussion');
   disc.replaceChildren();
@@ -566,9 +604,11 @@ $('#redo').addEventListener('click', async () => {
 });
 
 /* 탭 */
+const customMode = () => job?.minutes?.markdown != null;
 function selectTab(t) {
   $$('[data-tab]').forEach(x => x.setAttribute('aria-selected', x.dataset.tab === t));
-  $('#minutes').hidden = t !== 'minutes';
+  $('#minutes').hidden = t !== 'minutes' || customMode();
+  $('#customDoc').hidden = t !== 'minutes' || !customMode();
   $('#transcript').hidden = t !== 'transcript';
 }
 $$('[data-tab]').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
@@ -624,8 +664,10 @@ async function copy(text, msg) {
   }
 }
 const onTranscript = () => !$('#transcript').hidden;
-$('#copyNotion').addEventListener('click', () => copy(onTranscript() ? transcriptMd() : minutesMd(true), '복사했습니다. 노션 페이지에 붙여넣으세요'));
-$('#copyMd').addEventListener('click', () => copy(onTranscript() ? transcriptMd() : minutesMd(false), '마크다운으로 복사했습니다'));
+const docMd = notion => onTranscript() ? transcriptMd() : customMode() ? htmlToMd($('#customDoc')) : minutesMd(notion);
+$('#copyNotion').addEventListener('click', () => copy(docMd(true), '복사했습니다. 노션 페이지에 붙여넣으세요'));
+$('#copyMd').addEventListener('click', () => copy(docMd(false), '마크다운으로 복사했습니다'));
+$('#customDoc').addEventListener('input', () => { dirty = true; });
 $('#newBtn').addEventListener('click', () => { job = null; resetUpload(); go('upload'); });
 
 /* ---------- 공용 ---------- */
@@ -663,7 +705,87 @@ function toast(m) { const t = $('#toast'); t.textContent = m; t.hidden = false; 
 
 window.addEventListener('beforeunload', e => { if (busy || (job && job.segments.length)) { e.preventDefault(); e.returnValue = ''; } });
 
+/* ---------- 회의록 양식 ---------- */
+const PUBLIC_URL = 'https://gyugyu98.github.io/meeting-minutes/';
+let editingId = null, deleteArmed = false;
+function renderTplSelect() {
+  const list = loadTemplates(), sel = selectedTemplateId();
+  $('#tplSelect').innerHTML = `<option value="default">기본 양식 (주제·논의·결론·Task)</option>` +
+    list.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+  $('#tplSelect').value = list.some(t => t.id === sel) ? sel : 'default';
+  const custom = $('#tplSelect').value !== 'default';
+  $('#tplEdit').disabled = $('#tplShare').disabled = !custom;
+  $('#tplHint').textContent = custom
+    ? '이 양식의 제목·항목·표 모양 그대로 채웁니다. 정리 수준은 논의 내용의 분량에 적용됩니다.'
+    : '내 회의록 양식을 쓰려면 [새 양식]을 눌러 등록하세요. 한글(hwp)·워드 파일에서 불러올 수 있습니다.';
+}
+$('#tplSelect').addEventListener('change', () => { selectTemplateId($('#tplSelect').value); renderTplSelect(); });
+function openEditor(t) {
+  editingId = t ? t.id : null;
+  deleteArmed = false;
+  $('#tplEditorTitle').textContent = t ? '양식 편집' : '새 양식';
+  $('#tplName').value = t ? t.name : '';
+  $('#tplBody').value = t ? t.body : '';
+  $('#tplDelete').hidden = !t;
+  $('#tplDelete').textContent = '이 양식 삭제';
+  $('#tplEditor').hidden = false;
+  $('#tplName').focus();
+}
+$('#tplNew').addEventListener('click', () => openEditor(null));
+$('#tplEdit').addEventListener('click', () => openEditor(loadTemplates().find(t => t.id === $('#tplSelect').value)));
+$('#tplCancel').addEventListener('click', () => { $('#tplEditor').hidden = true; });
+$('#tplSave').addEventListener('click', () => {
+  const name = $('#tplName').value.trim(), body = $('#tplBody').value.trim();
+  if (!name) return toast('양식 이름을 넣어주세요');
+  if (!body) return toast('양식 내용을 넣어주세요');
+  const saved = upsertTemplate({ id: editingId || undefined, name, body });
+  selectTemplateId(saved.id); renderTplSelect();
+  $('#tplEditor').hidden = true;
+  toast(`'${name}' 양식을 저장했습니다`);
+});
+$('#tplDelete').addEventListener('click', () => {
+  if (!deleteArmed) { deleteArmed = true; $('#tplDelete').textContent = '한 번 더 누르면 삭제됩니다'; return; }
+  deleteTemplate(editingId); selectTemplateId('default'); renderTplSelect();
+  $('#tplEditor').hidden = true;
+  toast('양식을 삭제했습니다');
+});
+$('#tplFile').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  toast(`${f.name} 읽는 중…`);
+  try {
+    const md = await templateFromFile(f);
+    if (!md) return toast('파일에서 글자를 찾지 못했습니다');
+    $('#tplBody').value = md;
+    if (!$('#tplName').value.trim()) $('#tplName').value = f.name.replace(/\.[^.]+$/, '').slice(0, 60);
+    toast('불러왔습니다. 필요한 부분을 고친 뒤 저장하세요');
+  } catch (err) {
+    console.log('[회의록] 양식 파일 읽기 실패', err);
+    toast(`파일을 읽지 못했습니다: ${err.message}. 내용을 복사해 붙여넣어 주세요`);
+  }
+});
+$('#tplShare').addEventListener('click', async () => {
+  const t = loadTemplates().find(x => x.id === $('#tplSelect').value);
+  if (!t) return;
+  const base = location.protocol.startsWith('http') ? location.origin + location.pathname : PUBLIC_URL;
+  copy(base + '#tpl=' + await encodeTemplate(t), `'${t.name}' 양식 링크를 복사했습니다. 받은 사람이 열면 양식이 추가됩니다`);
+});
+// 양식 공유 링크로 열었으면 그 양식을 추가하고 고른다
+async function importTemplateFromLink() {
+  const m = location.hash.match(/^#tpl=([A-Za-z0-9_-]+)$/);
+  if (!m) return;
+  try {
+    const t = upsertTemplate(await decodeTemplate(m[1]));
+    selectTemplateId(t.id); renderTplSelect();
+    toast(`'${t.name}' 양식을 추가했습니다`);
+  } catch (e) { toast('양식 링크를 읽지 못했습니다'); }
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
 /* ---------- 시작 ---------- */
 resetUpload();
 renderKey();
+renderTplSelect();
+importTemplateFromLink();
 go(key() ? 'upload' : 'key');
