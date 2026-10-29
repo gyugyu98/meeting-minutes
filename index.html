@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>녹음 회의록</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><span class="dot" aria-hidden="true"></span>녹음 회의록</div>
+    <button class="chip" id="keyChip" type="button">API 키 없음</button>
+  </header>
+
+  <nav class="steps" aria-label="진행 단계">
+    <span data-step="key"><b>1</b>시작하기</span>
+    <span data-step="upload"><b>2</b>녹음 올리기</span>
+    <span data-step="work"><b>3</b>처리 중</span>
+    <span data-step="speaker"><b>4</b>화자 이름</span>
+    <span data-step="result"><b>5</b>회의록</span>
+  </nav>
+
+  <!-- 1. 시작하기 -->
+  <section class="view" data-view="key">
+    <div class="panel">
+      <h2>시작하려면 Gemini API 키가 하나 필요합니다</h2>
+      <p class="lead">받아쓰기와 회의록 정리는 본인 Google 계정의 Gemini로 처리합니다. 처음 한 번만 하면 되고, 무료로 받을 수 있습니다.</p>
+      <ol class="guide">
+        <li><div><strong>Google AI Studio 키 페이지를 엽니다</strong>
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> 에서 Google 계정으로 로그인합니다. 처음이면 약관 동의 화면이 나옵니다.</div></li>
+        <li><div><strong><span class="kbd">API 키 만들기</span> 버튼을 누릅니다</strong>
+          프로젝트를 고르라고 하면 기본으로 나오는 프로젝트를 그대로 쓰거나 새로 만듭니다. 결제 정보는 넣지 않아도 됩니다.</div></li>
+        <li><div><strong>만들어진 키를 복사해 아래에 붙여넣습니다</strong>
+          <span class="kbd">AIza…</span> 로 시작하는 문자열입니다. 키는 이 브라우저에만 저장되고, 녹음과 함께 Google로만 보내집니다.</div></li>
+      </ol>
+    </div>
+
+    <div class="panel">
+      <div class="field">
+        <label for="apiKey">Gemini API 키</label>
+        <div class="row">
+          <input class="input" id="apiKey" type="password" placeholder="AIza로 시작하는 키" autocomplete="off" style="flex:1 1 240px">
+          <button class="btn primary" id="saveKey" type="button">저장하고 시작</button>
+        </div>
+        <span class="hint" id="keyHint">공용 PC라면 다 쓴 뒤 상단의 키 표시를 눌러 지워주세요.</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3 style="font-size:16px">무료로 얼마나 쓸 수 있나요</h3>
+      <div class="quota">
+        <div><b>요청 2번</b><span>30분 이하 회의 1건에 드는 요청 (받아쓰기 1번 + 회의록 정리 1번)</span></div>
+        <div><b>30분 단위</b><span>받아쓰기 한 번에 맡기는 길이. 1시간 회의는 받아쓰기 2번</span></div>
+        <div><b>오후 4~5시</b><span>하루 사용량이 다시 채워지는 시각 (미국 서부 자정)</span></div>
+      </div>
+      <p class="hint" style="margin:10px 0 0">받아쓰기는 Google의 받아쓰기 전용 모델로, 회의록 정리는 Gemini Flash-Lite(무료 하루 약 500번)로 합니다. Flash-Lite 한도를 다 쓰면 Flash로 정리합니다. 한도는 계정마다 다르고 수시로 바뀌니 <a href="https://aistudio.google.com/rate-limit" target="_blank" rel="noopener">AI Studio 사용량 화면</a>에서 확인하세요.</p>
+    </div>
+
+    <div class="notice"><strong>민감한 회의에는 쓰지 마세요.</strong> 무료 키로 보낸 녹음과 결과는 Google이 서비스 개선에 쓸 수 있고, 사람이 검토할 수도 있습니다. 인사·계약·보안 관련 회의는 녹음을 올리지 마세요.</div>
+  </section>
+
+  <!-- 2. 업로드 -->
+  <section class="view" data-view="upload" hidden>
+    <label class="drop" id="drop" for="file">
+      <div class="big" id="dropTitle">녹음 파일을 끌어다 놓거나 눌러서 고르세요</div>
+      <div class="hint" id="dropSub">휴대폰 녹음(m4a), mp3, wav · 1시간 이상도 됩니다</div>
+      <input id="file" type="file" accept="audio/*,.m4a" hidden>
+    </label>
+    <div class="panel grid2">
+      <div class="field"><label for="mTitle">회의 이름 <span class="hint">(선택)</span></label><input class="input" id="mTitle" placeholder="비워두면 내용을 보고 정합니다"></div>
+      <div class="field"><label for="mDate">일시</label><input class="input" id="mDate" type="datetime-local"></div>
+      <div class="field" style="grid-column:1/-1"><label for="mPeople">참석자 <span class="hint">(선택, 쉼표로 구분)</span></label><input class="input" id="mPeople" placeholder="예: 김민지, 박준호, 이서연"><span class="hint">적어두면 화자 이름을 맞출 때 목록에서 고를 수 있습니다.</span></div>
+      <fieldset class="field level" style="grid-column:1/-1">
+        <legend>정리 수준</legend>
+        <div class="seg">
+          <input type="radio" name="level" id="lvBrief" value="간단"><label for="lvBrief"><b>간단</b><span>안건별 주요 의견과 근거를 몇 줄씩</span></label>
+          <input type="radio" name="level" id="lvNormal" value="보통" checked><label for="lvNormal"><b>보통</b><span>누가 어떤 의견을 냈고 어떻게 결론에 이르렀는지 흐름까지</span></label>
+          <input type="radio" name="level" id="lvDetail" value="자세히"><label for="lvDetail"><b>자세히</b><span>대화록을 안 읽어도 될 만큼. 근거·예시·질문과 답·숫자까지 빠짐없이</span></label>
+        </div>
+        <span class="hint">어느 수준이든 결론과 Task는 빠짐없이 담고, 회의가 길수록 회의록도 길어집니다.</span>
+      </fieldset>
+    </div>
+    <div class="row" style="justify-content:flex-end"><button class="btn primary" id="startBtn" type="button" disabled>회의록 만들기</button></div>
+  </section>
+
+  <!-- 3. 처리 -->
+  <section class="view" data-view="work" hidden>
+    <div class="panel" style="display:grid;gap:16px">
+      <div><h2 id="workTitle">회의록을 만들고 있습니다</h2><p class="lead">경과 <span id="elapsed" class="mono">0:00</span> · 이 창을 닫으면 처음부터 다시 해야 합니다.</p></div>
+      <div class="bar"><span id="barFill"></span></div>
+      <ul class="prog" id="prog"></ul>
+      <p class="hint" id="workNote" hidden></p>
+    </div>
+    <details class="panel stats" id="stats" open hidden>
+      <summary>처리 시간 측정</summary>
+      <ul id="statsList"></ul>
+    </details>
+    <div class="panel live" id="live" hidden>
+      <div class="live-head"><strong>받아쓰는 중인 내용</strong><span class="hint">최근 6줄 · 전체 <span id="liveCount"></span></span></div>
+      <div class="transcript" id="liveList"></div>
+    </div>
+    <div class="error" id="workError" hidden>
+      <p id="workErrorMsg"></p>
+      <div class="row"><button class="btn" id="restartBtn" type="button">처음으로</button><button class="btn primary" id="retryBtn" type="button">이어서 다시 시도</button></div>
+    </div>
+  </section>
+
+  <!-- 4. 화자 -->
+  <section class="view" data-view="speaker" hidden>
+    <div class="panel">
+      <h2>누가 누구인지 알려주세요</h2>
+      <p class="lead" id="spkLead"></p>
+      <div id="spkList" style="margin-top:12px"></div>
+    </div>
+    <div class="row" style="justify-content:flex-end"><button class="btn ghost" id="skipNames" type="button">건너뛰기</button><button class="btn primary" id="applyNames" type="button">회의록 보기</button></div>
+  </section>
+
+  <!-- 5. 회의록 -->
+  <section class="view" data-view="result" hidden>
+    <div class="tabs" role="tablist">
+      <button role="tab" aria-selected="true" data-tab="minutes" type="button">회의록</button>
+      <button role="tab" aria-selected="false" data-tab="transcript" type="button">전체 대화록</button>
+    </div>
+
+    <article class="doc" id="minutes">
+      <input class="doc-title edit" id="docTitle" aria-label="회의 제목">
+      <dl class="props">
+        <dt>일시</dt><dd class="edit" contenteditable="true" id="pDate"></dd>
+        <dt>참석자</dt><dd class="edit" contenteditable="true" id="pPeople"></dd>
+        <dt>정리 수준</dt><dd class="redo">
+          <span id="pLevel"></span>
+          <select class="input mini" id="redoLevel" aria-label="다시 정리할 수준"><option>간단</option><option>보통</option><option>자세히</option></select>
+          <button class="btn ghost" id="redo" type="button">이 수준으로 다시 정리</button>
+        </dd>
+      </dl>
+
+      <h3>회의 주제</h3>
+      <div class="callout edit" contenteditable="true" id="topic"></div>
+
+      <h3>논의 과정</h3>
+      <div class="edit" contenteditable="true" id="discussion"></div>
+
+      <h3>결론</h3>
+      <ul class="edit" contenteditable="true" id="conclusion"></ul>
+      <div id="undecidedWrap" hidden>
+        <h4 class="sub">결론 나지 않은 것</h4>
+        <ul class="edit" contenteditable="true" id="undecided"></ul>
+      </div>
+
+      <h3>Task</h3>
+      <div class="tblwrap">
+        <table>
+          <thead><tr><th style="width:36px">완료</th><th>할 일</th><th style="width:110px">담당</th><th style="width:130px">기한</th><th style="width:28px"></th></tr></thead>
+          <tbody id="taskBody"></tbody>
+        </table>
+      </div>
+      <button class="btn ghost" id="addTask" type="button" style="margin-top:6px">+ Task 추가</button>
+    </article>
+
+    <article class="doc" id="transcript" hidden>
+      <div class="transcript" id="transcriptList"></div>
+    </article>
+
+    <div class="actions">
+      <button class="btn ghost" id="newBtn" type="button">새 녹음</button>
+      <button class="btn" id="copyMd" type="button">마크다운 복사</button>
+      <button class="btn primary" id="copyNotion" type="button">노션용 복사</button>
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast" hidden></div>
+<script src="gemini.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
