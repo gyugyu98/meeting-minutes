@@ -536,6 +536,8 @@ function renderMinutes(m) {
   $('#pLevel').textContent = job.meta.level;
   $('#pTemplate').textContent = job.meta.template ? job.meta.template.name : '기본 양식';
   $('#redoLevel').value = job.meta.level;
+  renderRedoTemplates();
+  if (m.title) $('#docTitle').value = sub(m.title);
   if (m.markdown != null) {   // 사용자 양식: 양식 모양 그대로 그려서 그 자리에서 고치게 한다
     $('#customDoc').innerHTML = mdToHtml(sub(m.markdown));
     dirty = false; resetRedo();
@@ -587,10 +589,19 @@ function renderTranscript() {
 
 /* 다시 정리 */
 let redoArmed = false;
-function resetRedo() { redoArmed = false; $('#redo').textContent = '이 수준으로 다시 정리'; $('#redo').disabled = false; }
+function resetRedo() { redoArmed = false; $('#redo').textContent = '이대로 다시 정리'; $('#redo').disabled = false; }
+// 결과 화면의 양식 선택: 받아쓴 대화록으로 정리만 다시 하므로 녹음을 다시 올리지 않아도 된다
+function renderRedoTemplates() {
+  const list = loadTemplates();
+  $('#redoTemplate').innerHTML = `<option value="default">기본 양식</option>` +
+    list.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+  $('#redoTemplate').value = job.meta.template && list.some(t => t.id === job.meta.template.id) ? job.meta.template.id : 'default';
+}
 $('#redo').addEventListener('click', async () => {
   if (dirty && !redoArmed) { redoArmed = true; $('#redo').textContent = '고친 내용이 사라집니다. 한 번 더 누르면 진행'; return; }
   const level = $('#redoLevel').value;
+  const prevTemplate = job.meta.template;
+  job.meta.template = loadTemplates().find(t => t.id === $('#redoTemplate').value) || null;
   const btn = $('#redo'), started = Date.now();
   let chars = 0, waitMsg = '';
   const show = () => {
@@ -606,8 +617,11 @@ $('#redo').addEventListener('click', async () => {
       n => { chars = n; show(); });
     job.minutes = m; job.meta.level = level;
     renderMinutes(m);
-    toast(`${level} 수준으로 다시 정리했습니다 (${Math.round((Date.now() - started) / 1000)}초)`);
+    selectTab(currentTab());   // 양식이 바뀌면 보여줄 화면(기본 양식 / 내 양식)도 바뀐다
+    toast(`${job.meta.template ? job.meta.template.name : '기본 양식'} · ${level} 수준으로 다시 정리했습니다 (${Math.round((Date.now() - started) / 1000)}초)`);
   } catch (e) {
+    job.meta.template = prevTemplate;
+    renderRedoTemplates();
     toast(e instanceof ApiError && e.dailyQuota ? '오늘 무료 사용량을 다 썼습니다. 오후 4~5시 이후에 다시 해주세요' : `다시 정리하지 못했습니다: ${e.message}`);
     resetRedo();
   } finally { clearInterval(timer); busy = false; }
@@ -615,12 +629,16 @@ $('#redo').addEventListener('click', async () => {
 
 /* 탭 */
 const customMode = () => job?.minutes?.markdown != null;
+const currentTab = () => $('[data-tab][aria-selected="true"]')?.dataset.tab || 'minutes';
 function selectTab(t) {
   $$('[data-tab]').forEach(x => x.setAttribute('aria-selected', x.dataset.tab === t));
   $('#minutes').hidden = t !== 'minutes' || customMode();
   $('#customDoc').hidden = t !== 'minutes' || !customMode();
   $('#transcript').hidden = t !== 'transcript';
+  $('#mdView').hidden = t !== 'markdown';
+  if (t === 'markdown') $('#mdText').textContent = minutesAsMd(false);   // 회의록 탭에서 고친 내용까지 담는다
 }
+const minutesAsMd = notion => customMode() ? htmlToMd($('#customDoc')) : minutesMd(notion);
 $$('[data-tab]').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
 
 /* 복사 */
@@ -674,7 +692,7 @@ async function copy(text, msg) {
   }
 }
 const onTranscript = () => !$('#transcript').hidden;
-const docMd = notion => onTranscript() ? transcriptMd() : customMode() ? htmlToMd($('#customDoc')) : minutesMd(notion);
+const docMd = notion => onTranscript() ? transcriptMd() : minutesAsMd(notion);
 $('#copyNotion').addEventListener('click', () => copy(docMd(true), '복사했습니다. 노션 페이지에 붙여넣으세요'));
 $('#copyMd').addEventListener('click', () => copy(docMd(false), '마크다운으로 복사했습니다'));
 $('#customDoc').addEventListener('input', () => { dirty = true; });

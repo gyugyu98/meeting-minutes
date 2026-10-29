@@ -125,6 +125,9 @@ fieldset.level legend{font-size:13px;font-weight:600;padding:0;margin-bottom:6px
 .tpl-editor h3{font-size:16px}
 .tpl-body{font-family:var(--mono);font-size:13px;line-height:1.55;resize:vertical;min-height:220px}
 .mini-btn{padding:4px 10px;font-size:13px}
+.md-doc{display:grid;gap:10px}
+.md-doc .hint{margin:0}
+.md-text{margin:0;padding:14px 16px;background:var(--sunk);border-radius:8px;font-family:var(--mono);font-size:13px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;max-height:70vh;overflow:auto;user-select:text}
 .file-note{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--accent-soft);border-radius:8px;padding:10px 14px;font-size:14px}
 .btn.danger{color:var(--rec)}
 .custom-doc{margin:0;padding:28px clamp(16px,4vw,40px)}
