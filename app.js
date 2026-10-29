@@ -34,6 +34,7 @@ function newJob(file, duration) {
     meta: {
       title: $('#mTitle').value.trim(), date: $('#mDate').value, people: splitPeople($('#mPeople').value), level: $('input[name=level]:checked').value,
       style: $('input[name=style]:checked')?.value || '발언자별',
+      customStyle: $('#customStyle').value.trim(),
       template: loadTemplates().find(t => t.id === $('#tplSelect').value) || null,   // null이면 기본 양식
     },
     segments: [], minutes: null, names: {},
@@ -117,9 +118,21 @@ function audioDuration(file) {
   });
 }
 
+// 정리 스타일 "직접 작성": 고르면 적는 칸을 보이고, 적은 내용은 이 브라우저에 저장해 다음에도 쓴다
+function renderCustomStyleBox() {
+  $('#customStyleBox').hidden = $('input[name=style]:checked')?.value !== '직접 작성';
+}
+$$('input[name=style]').forEach(r => r.addEventListener('change', renderCustomStyleBox));
+$('#customStyle').addEventListener('input', () => store(CUSTOM_STYLE_KEY, $('#customStyle').value));
+$('#redoStyle').addEventListener('change', () => {
+  $('#redoCustomBox').hidden = $('#redoStyle').value !== '직접 작성';
+  if (!$('#redoCustomStyle').value.trim()) $('#redoCustomStyle').value = load(CUSTOM_STYLE_KEY) || '';
+});
+
 $('#startBtn').addEventListener('click', async () => {
   if (!key()) return go('key');
   if (!picked) return;
+  if ($('input[name=style]:checked')?.value === '직접 작성' && !$('#customStyle').value.trim()) return toast('나만의 정리 방식을 적어주세요');
   $('#startBtn').disabled = true;
   job = newJob(picked, await audioDuration(picked));
   $('#startBtn').disabled = false;
@@ -381,7 +394,15 @@ const STYLES = {
 - 한 항목에는 한 단계만, 1~2문장으로 씁니다.`,
   },
 };
-const styleOf = () => STYLES[job.meta.style] ? job.meta.style : '발언자별';
+// 직접 작성: 사용자가 쓴 정리 방식을 가장 우선해서 따르게 한다 (이 브라우저에 저장)
+STYLES['직접 작성'] = {
+  agendas: '안건마다 summary에 논의 결과를 한 문장으로 쓰고, 논의 내용은 아래 사용자 지시에 맞춰 points에 씁니다. 사용자 지시가 사람별로 묶으라는 뜻이면 opinions에 발언자별로 씁니다.',
+  get rule() {
+    return `- 논의 내용은 다음 사용자 지시를 가장 우선해서 따릅니다(다른 정리 규칙과 부딪히면 이 지시를 따름):\n"""\n${job?.meta.customStyle || ''}\n"""`;
+  },
+};
+const styleOf = () => STYLES[job.meta.style] && (job.meta.style !== '직접 작성' || job.meta.customStyle) ? job.meta.style : '발언자별';
+const CUSTOM_STYLE_KEY = 'mm_custom_style';
 // 회의 길이(분). 녹음 길이를 모르면 대화록 글자 수로 어림한다(한국어 말 1분 ≈ 300자).
 function meetingMinutes(text) { return job.duration > 0 ? job.duration / 60 : text.length / 300; }
 
@@ -574,6 +595,8 @@ function renderMinutes(m) {
     : job.meta.template.name + (job.meta.template.file ? ` (${job.meta.template.file.kind === 'hwpx' ? '한글' : '워드'} 서식 포함)` : ' (서식 파일 없음)');
   $('#redoLevel').value = job.meta.level;
   $('#redoStyle').value = styleOf();
+  $('#redoCustomStyle').value = job.meta.customStyle || load(CUSTOM_STYLE_KEY) || '';
+  $('#redoCustomBox').hidden = styleOf() !== '직접 작성';
   renderRedoTemplates();
   renderDownloadBtn();
   if (m.title) $('#docTitle').value = sub(m.title);
@@ -654,6 +677,11 @@ $('#redo').addEventListener('click', async () => {
   const prevTemplate = job.meta.template, prevStyle = job.meta.style;
   job.meta.template = loadTemplates().find(t => t.id === $('#redoTemplate').value) || null;
   job.meta.style = $('#redoStyle').value;
+  if (job.meta.style === '직접 작성') {
+    job.meta.customStyle = $('#redoCustomStyle').value.trim();
+    if (!job.meta.customStyle) { job.meta.style = prevStyle; return toast('나만의 정리 방식을 적어주세요'); }
+    store(CUSTOM_STYLE_KEY, job.meta.customStyle);
+  }
   const btn = $('#redo'), started = Date.now();
   let chars = 0, waitMsg = '';
   const show = () => {
@@ -688,8 +716,6 @@ function selectTab(t) {
   $('#minutes').hidden = t !== 'minutes' || customMode();
   $('#customDoc').hidden = t !== 'minutes' || !customMode();
   $('#transcript').hidden = t !== 'transcript';
-  $('#mdView').hidden = t !== 'markdown';
-  if (t === 'markdown') $('#mdText').textContent = minutesAsMd(false);   // 회의록 탭에서 고친 내용까지 담는다
 }
 const minutesAsMd = notion => customMode() ? htmlToMd($('#customDoc')) : minutesMd(notion);
 $$('[data-tab]').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
@@ -1006,5 +1032,7 @@ async function migrateTemplates() {
 resetUpload();
 renderKey();
 renderTplSelect();
+$('#customStyle').value = load(CUSTOM_STYLE_KEY) || '';
+renderCustomStyleBox();
 migrateTemplates();
 go(key() ? 'upload' : 'key');

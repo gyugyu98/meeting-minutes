@@ -88,6 +88,12 @@
           <input type="radio" name="style" id="stSpeaker" value="발언자별" checked><label for="stSpeaker"><b>발언자별</b><span>안건마다 누가 어떤 의견을 냈는지 사람별로 묶음</span></label>
           <input type="radio" name="style" id="stTopic" value="안건별 요약"><label for="stTopic"><b>안건별 요약</b><span>사람 구분 없이 안건마다 논의 요점만 정리</span></label>
           <input type="radio" name="style" id="stFlow" value="흐름순"><label for="stFlow"><b>흐름순</b><span>논의가 오간 순서대로 제기 → 반응 → 결론</span></label>
+          <input type="radio" name="style" id="stCustom" value="직접 작성"><label for="stCustom"><b>직접 작성</b><span>내가 쓴 지시대로 정리</span></label>
+        </div>
+        <div class="field custom-style" id="customStyleBox" hidden>
+          <label for="customStyle">나만의 정리 방식</label>
+          <textarea class="input" id="customStyle" rows="4" placeholder="예: 안건마다 배경 → 논의 → 결정 순서로 정리하고, 반대 의견은 따로 모아줘. 숫자·일정이 나오면 빠짐없이 적어줘."></textarea>
+          <span class="hint">논의 과정을 어떻게 정리할지 평소 말하듯 적으세요. 이 브라우저에 저장되어 다음에도 쓰입니다. 문장 끝맺음(개조식)과 결론·Task 정리는 그대로 적용됩니다.</span>
         </div>
       </fieldset>
       <div class="field" style="grid-column:1/-1">
@@ -165,13 +171,16 @@
       <span class="redo">
         <select class="input mini" id="redoTemplate" aria-label="다시 정리할 양식"></select>
         <select class="input mini" id="redoLevel" aria-label="다시 정리할 수준"><option>간단</option><option>보통</option><option>자세히</option></select>
-        <select class="input mini" id="redoStyle" aria-label="다시 정리할 스타일"><option>발언자별</option><option>안건별 요약</option><option>흐름순</option></select>
+        <select class="input mini" id="redoStyle" aria-label="다시 정리할 스타일"><option>발언자별</option><option>안건별 요약</option><option>흐름순</option><option>직접 작성</option></select>
         <button class="btn ghost" id="redo" type="button">이대로 다시 정리</button>
       </span>
     </div>
+    <div class="field custom-style" id="redoCustomBox" hidden>
+      <label for="redoCustomStyle">나만의 정리 방식</label>
+      <textarea class="input" id="redoCustomStyle" rows="3" placeholder="예: 안건마다 배경 → 논의 → 결정 순서로 정리하고, 반대 의견은 따로 모아줘."></textarea>
+    </div>
     <div class="tabs" role="tablist">
       <button role="tab" aria-selected="true" data-tab="minutes" type="button">회의록</button>
-      <button role="tab" aria-selected="false" data-tab="markdown" type="button">마크다운</button>
       <button role="tab" aria-selected="false" data-tab="transcript" type="button">전체 대화록</button>
     </div>
 
@@ -206,11 +215,6 @@
     </article>
 
     <article class="doc custom-doc edit" id="customDoc" contenteditable="true" hidden></article>
-
-    <article class="doc md-doc" id="mdView" hidden>
-      <p class="hint">지금 회의록을 마크다운으로 보여줍니다. 회의록 탭에서 고친 내용도 반영됩니다. 노션·깃허브·옵시디언 등에 그대로 붙여넣을 수 있습니다.</p>
-      <pre class="md-text" id="mdText"></pre>
-    </article>
 
     <article class="doc" id="transcript" hidden>
       <div class="transcript" id="transcriptList"></div>
