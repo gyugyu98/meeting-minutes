@@ -1,6 +1,7 @@
 # 녹음 회의록
 
 휴대폰 녹음 파일을 올리면 화자별 대화록과 회의록(회의 주제, 논의 과정, 결론, Task)을 만들어 주는 웹페이지입니다.
+n**사용하기: https://gyugyu98.github.io/meeting-minutes/** (Gemini API 키만 있으면 됩니다)
 서버 없이 브라우저에서 사용자 본인의 Gemini API 키로 Google에 직접 요청합니다.
 
 ## 내 PC에서 실행
