@@ -743,7 +743,8 @@ function renderTplSelect() {
     list.map(t => `<option value="${esc(t.id)}">${esc(t.name)}${t.file ? ' · 한글 서식' : ''}</option>`).join('');
   $('#tplSelect').value = list.some(t => t.id === sel) ? sel : 'default';
   const t = currentTemplate();
-  $('#tplEdit').disabled = !t;
+  $('#tplEdit').disabled = $('#tplQuickDelete').disabled = !t;
+  resetQuickDelete();
   $('#tplHint').textContent = !t
     ? '내 회의록 양식을 쓰려면 [새 양식]을 눌러 등록하세요. 한글(hwp·hwpx)·워드 파일이나 이미 작성한 회의록을 올리면 됩니다.'
     : t.file
@@ -768,6 +769,25 @@ function openEditor(t) {
   $('#tplEditor').hidden = false;
   $('#tplName').focus();
 }
+// 양식 줄의 [삭제]: 한 번 누르면 확인 문구로 바뀌고, 3초 안에 다시 누르면 지운다
+let quickDeleteTimer = null;
+function resetQuickDelete() {
+  clearTimeout(quickDeleteTimer); quickDeleteTimer = null;
+  $('#tplQuickDelete').textContent = '삭제';
+}
+$('#tplQuickDelete').addEventListener('click', () => {
+  const t = currentTemplate();
+  if (!t) return;
+  if (!quickDeleteTimer) {
+    $('#tplQuickDelete').textContent = `'${t.name.slice(0, 12)}' 삭제? 한 번 더`;
+    quickDeleteTimer = setTimeout(resetQuickDelete, 3000);
+    return;
+  }
+  deleteTemplate(t.id); selectTemplateId('default');
+  if (editingId === t.id) $('#tplEditor').hidden = true;
+  renderTplSelect();
+  toast(`'${t.name}' 양식을 삭제했습니다`);
+});
 $('#tplNew').addEventListener('click', () => openEditor(null));
 $('#tplEdit').addEventListener('click', () => openEditor(currentTemplate()));
 $('#tplCancel').addEventListener('click', () => { $('#tplEditor').hidden = true; });
