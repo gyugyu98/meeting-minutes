@@ -550,6 +550,7 @@ function renderMinutes(m) {
   $('#pTemplate').textContent = job.meta.template ? job.meta.template.name : '기본 양식';
   $('#redoLevel').value = job.meta.level;
   renderRedoTemplates();
+  renderDownloadBtn();
   if (m.title) $('#docTitle').value = sub(m.title);
   if (m.markdown != null) {   // 사용자 양식: 양식 모양 그대로 그려서 그 자리에서 고치게 한다
     $('#customDoc').innerHTML = mdToHtml(sub(m.markdown));
@@ -769,17 +770,18 @@ function renderTplSelect() {
   $('#tplHint').textContent = !t
     ? '내 회의록 양식을 쓰려면 [새 양식]을 눌러 등록하세요. 한글(hwp·hwpx)·워드 파일이나 이미 작성한 회의록을 올리면 됩니다.'
     : t.file
-      ? '이 양식의 항목대로 정리하고, 결과 화면의 [한글 파일]로 받으면 올린 한글 파일의 서식 그대로 채워집니다.'
-      : '이 양식의 제목·항목·표 모양 그대로 채웁니다. 정리 수준은 논의 내용의 분량에 적용됩니다.';
+      ? `이 양식의 항목대로 정리하고, 결과 화면에서 ${FILE_LABEL[t.file.kind]}로 받으면 올린 파일의 서식 그대로 채워집니다.`
+      : '이 양식의 항목대로 정리합니다. 파일로 받으려면 양식을 hwpx나 docx 파일로 올리세요.';
 }
 $('#tplSelect').addEventListener('change', () => { selectTemplateId($('#tplSelect').value); renderTplSelect(); });
+// 양식 파일 형식별 내려받기 이름 (올린 형식 그대로 돌려준다)
+const FILE_LABEL = { hwpx: '[한글 파일(.hwpx)]', docx: '[워드 파일(.docx)]' };
 function renderFileNote() {
   $('#tplFileNote').hidden = !pendingFile;
   $('#tplFileName').textContent = pendingFile ? pendingFile.name : '';
-  // hwp는 브라우저에서 쓸 수 없어 hwpx로 변환해 보관하는데, 이 변환에서 표 머리 부분 등이 틀어질 수 있다
-  $('#tplFileHint').textContent = pendingFile && /\.hwp$/i.test(pendingFile.name)
-    ? 'hwp 파일은 hwpx로 변환해 보관했습니다. 변환하면서 표 머리 부분 등 서식이 달라질 수 있습니다. 한글에서 [다른 이름으로 저장 → HWPX]로 저장한 파일을 올리면 원본 서식 그대로 채워집니다.'
-    : '결과 화면에서 [한글 파일]로 받으면 이 파일의 서식(표·글꼴·로고) 그대로 채워집니다. 칸 안의 글자만 바뀝니다.';
+  $('#tplFileHint').textContent = pendingFile
+    ? `결과 화면에서 ${FILE_LABEL[pendingFile.kind]}로 받으면 이 파일의 서식(표·글꼴·로고) 그대로, 칸 안의 글자만 바꿔 채웁니다.`
+    : '';
 }
 function openEditor(t) {
   editingId = t ? t.id : null;
@@ -843,18 +845,24 @@ $('#tplFile').addEventListener('change', async e => {
     const res = await templateFromFile(f);
     if (!res.body) return toast('파일에서 글자를 찾지 못했습니다');
     $('#tplBody').value = res.body;
-    pendingFile = res.hwpx ? { name: f.name, hwpx: bytesToB64(res.hwpx) } : null;
+    pendingFile = res.file ? { name: f.name, kind: res.file.kind, data: bytesToB64(res.file.bytes) } : null;
     renderFileNote();
     if (!$('#tplName').value.trim()) $('#tplName').value = f.name.replace(/\.[^.]+$/, '').slice(0, 60);
-    toast(!res.hwpx ? '불러왔습니다. 필요한 부분을 고친 뒤 저장하세요'
-      : /\.hwp$/i.test(f.name) ? '불러왔습니다. 서식을 원본 그대로 쓰려면 hwpx로 저장해 올리세요' : '불러왔습니다. 한글 서식도 함께 보관합니다');
+    toast(res.hwpOnly ? 'hwp는 글자 구성만 읽었습니다. 서식 그대로 받으려면 한글에서 [다른 이름으로 저장 → HWPX]로 저장해 올리세요'
+      : res.file ? '불러왔습니다. 파일 서식도 함께 보관합니다' : '불러왔습니다. 필요한 부분을 고친 뒤 저장하세요');
   } catch (err) {
     console.log('[회의록] 양식 파일 읽기 실패', err);
     toast(`파일을 읽지 못했습니다: ${err.message}. 내용을 복사해 붙여넣어 주세요`);
   }
 });
 
-/* ---------- 한글 파일(.hwpx) 받기 ---------- */
+/* ---------- 양식 파일(.hwpx·.docx)로 받기 ---------- */
+// 올린 양식 파일과 같은 형식으로, 원본 파일에 글자만 채워 돌려준다. 파일 양식이 없으면 버튼을 숨긴다.
+function renderDownloadBtn() {
+  const kind = job?.meta.template?.file?.kind;
+  $('#hwpxBtn').hidden = !kind;
+  if (kind) $('#hwpxBtn').textContent = FILE_LABEL[kind].replace(/[\[\]]/g, '');
+}
 const FILL_SCHEMA = {
   type: 'OBJECT',
   properties: {
@@ -867,7 +875,7 @@ const FILL_SCHEMA = {
 };
 function fillPrompt(inventory, minutesMarkdown) {
   const people = $('#pPeople').textContent.trim() || job.meta.people.join(', ');
-  return `아래 [양식 칸 목록]은 한글 회의록 양식 파일의 표 칸(C번호)과 칸 안의 문단(P번호)입니다. 이 양식은 이전 회의를 기록한 회의록일 수 있어서, 칸 안의 글은 예시입니다.
+  return `아래 [양식 칸 목록]은 회의록 양식 파일의 표 칸(C번호)과 칸 안의 문단(P번호)입니다. 이 양식은 이전 회의를 기록한 회의록일 수 있어서, 칸 안의 글은 예시입니다.
 [새 회의록]의 내용으로 이 양식을 채우는 계획을 cells에 적으세요.
 
 규칙:
@@ -877,9 +885,9 @@ function fillPrompt(inventory, minutesMarkdown) {
 - 날짜는 그 칸의 예시와 같은 표기로 씁니다(예: 2025.07.23 꼴이면 2026.10.29, 2025년 07월 23일 꼴이면 2026년 10월 29일). 예시가 없으면 "2026년 10월 29일" 꼴로 씁니다.
 - 새 회의록의 문장 끝맺음("~함", "~음", 명사로 끝남)은 그대로 둡니다.
 - 목록 항목 하나는 문단 하나입니다. 여러 항목을 한 문단에 이어 쓰지 말고, 항목마다 같은 모양의 문단을 반복해서 씁니다.
-- 마크다운 기호(**, #, [ ], 표의 |)는 쓰지 않습니다.
-- 칸에 넣을 문단마다 like에 역할이 같은 예시 문단 번호를 고릅니다. 같은 칸 안의 문단을 우선 고릅니다. 예: 큰 제목은 "1. ..." 같은 제목 문단, 발표자 이름은 발표자 문단, 굵은 안건과 세부 내용이 한 문단에 있는 형식은 그 문단, 세부 내용만 있는 줄은 그런 문단, 빈 줄은 빈 문단.
-- parts는 like 문단의 조각 수에 맞춰 나눠 씁니다. 조각이 1개인 문단은 parts가 1개입니다. 예시 조각의 앞 공백과 기호(예: "  - ", "     : ")는 같은 모양으로 맞춥니다. ⏎는 그 자리에서 줄을 바꾼다는 뜻입니다.
+- 마크다운 기호(**, #, [ ], 표의 |)는 쓰지 않습니다. 목록 항목은 "  - ", 하위 세부는 "     : "처럼 양식 예시의 앞 기호를 따르고, 예시가 없으면 "  - "와 "    · "를 씁니다.
+- 칸에 넣을 문단마다 like에 역할이 같은 예시 문단 번호를 고릅니다. 같은 칸 안의 문단을 우선 고릅니다. 예: 큰 제목은 "1. ..." 같은 제목 문단, 발표자 이름은 발표자 문단, 굵은 안건과 세부 내용이 한 문단에 있는 형식은 그 문단, 세부 내용만 있는 줄은 그런 문단, 빈 줄은 빈 문단. 제목이 아닌 줄(목록·세부·발표자)에 제목 문단을 고르지 않습니다. 맞는 예시가 없으면 빈 문단을 고릅니다.
+- parts는 like 문단의 조각 수에 맞춰 나눠 씁니다. 조각이 1개인 문단은 parts가 1개입니다. ⏎는 그 자리에서 줄을 바꾼다는 뜻입니다.
 - 새 회의록의 내용은 빠짐없이 옮기고 줄이지 않습니다. 예시 회의록의 내용은 가져오지 않습니다.
 - 새 회의록의 구성이 양식과 다르면 양식의 구성에 맞춰 옮겨 담습니다. 양식에 자리가 없는 결론·결정 사항은 가장 가까운 항목에 넣습니다.
 
@@ -891,8 +899,9 @@ ${inventory}
 [새 회의록]
 ${minutesMarkdown}`;
 }
-function downloadBytes(bytes, name) {
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/hwp+zip' }));
+const MIME = { hwpx: 'application/hwp+zip', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+function downloadBytes(bytes, name, kind) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: MIME[kind] || 'application/octet-stream' }));
   const a = document.createElement('a');
   a.href = url; a.download = name;
   document.body.append(a); a.click(); a.remove();
@@ -900,53 +909,55 @@ function downloadBytes(bytes, name) {
 }
 $('#hwpxBtn').addEventListener('click', async () => {
   const btn = $('#hwpxBtn');
-  if (btn.disabled) return;
+  const file = job?.meta.template?.file;
+  if (btn.disabled || !file) return;
   const label = btn.textContent;
-  btn.disabled = true; btn.textContent = '한글 파일 만드는 중…';
+  btn.disabled = true; btn.textContent = '파일 만드는 중…';
   try {
-    const md = customMode() ? htmlToMd($('#customDoc')) : minutesMd(false);
+    const md = minutesAsMd(false);
     const title = ($('#docTitle').value.trim() || '회의록').replace(/[\\/:*?"<>|]/g, ' ').slice(0, 80);
-    const tpl = job.meta.template;
-    let bytes;
-    if (tpl?.file) {
-      // 올린 한글 양식에 채운다: 칸 목록을 Gemini에게 보여주고 어느 칸에 무엇을 어떤 문단 모양으로 넣을지 받는다
-      const src = b64ToBytes(tpl.file.hwpx);
-      const inv = await hwpxInventory(src);
-      const m = await ensureModels();
-      const ask = mdl => withRetry(() => generateJSON(key(), mdl, [{ text: fillPrompt(inv.text, md) }], FILL_SCHEMA, {
-        thinking: 'low',
-        onText: text => { btn.textContent = `한글 파일 만드는 중 · ${text.length.toLocaleString()}자`; },
-        onStats: st => console.log('[회의록 측정] 한글 양식 채우기', mdl, st),
-      }), (s, why) => { btn.textContent = s ? `${why} (${s}초)` : '한글 파일 만드는 중…'; });
-      let plan;
-      try { plan = await ask(m.lite || m.summary); }
-      catch (e) {
-        if (!(e instanceof ApiError) || !(e.dailyQuota || e.modelUnavailable) || !m.summary) throw e;
-        plan = await ask(m.summary);
-      }
-      bytes = await fillHwpx(src, plan);
-    } else {
-      // 한글 서식 파일이 없으면 화면 내용을 기본 서식의 한글 파일로 만든다
-      await loadHwpConvert();
-      bytes = await window.HwpConvert.markdownToHwpx(md, { title });
+    // 칸 목록을 Gemini에게 보여주고 어느 칸에 무엇을 어떤 문단 모양으로 넣을지 받아, 원본 파일에 채운다
+    const src = b64ToBytes(file.data);
+    const inv = await docInventory(src, file.kind);
+    const m = await ensureModels();
+    const ask = mdl => withRetry(() => generateJSON(key(), mdl, [{ text: fillPrompt(inv.text, md) }], FILL_SCHEMA, {
+      thinking: 'low',
+      onText: text => { btn.textContent = `파일 만드는 중 · ${text.length.toLocaleString()}자`; },
+      onStats: st => console.log('[회의록 측정] 양식 파일 채우기', mdl, st),
+    }), (s, why) => { btn.textContent = s ? `${why} (${s}초)` : '파일 만드는 중…'; });
+    let plan;
+    try { plan = await ask(m.lite || m.summary); }
+    catch (e) {
+      if (!(e instanceof ApiError) || !(e.dailyQuota || e.modelUnavailable) || !m.summary) throw e;
+      plan = await ask(m.summary);
     }
-    downloadBytes(bytes, `${title}.hwpx`);
-    toast('한글 파일을 내려받았습니다. 한글에서 열어 확인하세요');
+    downloadBytes(await fillDoc(src, file.kind, plan), `${title}.${file.kind}`, file.kind);
+    toast(file.kind === 'hwpx' ? '한글 파일을 내려받았습니다. 한글에서 열어 확인하세요' : '워드 파일을 내려받았습니다. 워드에서 열어 확인하세요');
   } catch (e) {
-    console.log('[회의록] 한글 파일 만들기 실패', e);
-    toast(e instanceof ApiError && e.dailyQuota ? '오늘 무료 사용량을 다 썼습니다. 오후 4~5시 이후에 다시 해주세요' : `한글 파일을 만들지 못했습니다: ${e.message}`);
+    console.log('[회의록] 양식 파일 만들기 실패', e);
+    toast(e instanceof ApiError && e.dailyQuota ? '오늘 무료 사용량을 다 썼습니다. 오후 4~5시 이후에 다시 해주세요' : `파일을 만들지 못했습니다: ${e.message}`);
   } finally {
     btn.disabled = false; btn.textContent = label;
   }
 });
 
-// 예전 방식으로 읽어 둔 한글 양식(표를 마크다운 표로 옮긴 것)은 새 방식(머리 항목 + 내용 구성)으로 다시 읽는다
+// 예전에 저장한 양식을 새 방식으로 바꾼다:
+// - hwp를 변환해 보관한 서식 파일은 변환에서 서식이 깨지므로 버리고 글자 구성만 남긴다
+// - 한글 hwpx 서식 파일은 새 보관 형식({ kind, data })으로 옮긴다
+// - 표를 마크다운 표로 옮겼던 양식 글은 새 방식(머리 항목 + 내용 구성)으로 다시 읽는다
 async function migrateTemplates() {
+  let dropped = 0;
   for (const t of loadTemplates()) {
-    if (!t.file || !/\(아래 내용\)|^\|/m.test(t.body)) continue;
-    try { upsertTemplate({ ...t, body: (await hwpxToMd(b64ToBytes(t.file.hwpx))).trim() }); }
-    catch (e) { console.log('[회의록] 양식 다시 읽기 실패', t.name, e); }
+    if (!t.file || t.file.kind) continue;
+    try {
+      const bytes = b64ToBytes(t.file.hwpx);
+      const body = /\(아래 내용\)|^\|/m.test(t.body) ? (await formToMd(await openDoc(bytes, 'hwpx'))).trim() : t.body;
+      if (/\.hwp$/i.test(t.file.name)) { upsertTemplate({ id: t.id, name: t.name, body }); dropped++; }
+      else upsertTemplate({ id: t.id, name: t.name, body, file: { name: t.file.name, kind: 'hwpx', data: t.file.hwpx } });
+    } catch (e) { console.log('[회의록] 양식 옮기기 실패', t.name, e); }
   }
+  renderTplSelect();
+  if (dropped) toast(`hwp로 올린 양식 ${dropped}개는 서식이 깨질 수 있어 글자 구성만 남겼습니다. 서식 그대로 받으려면 hwpx로 저장해 다시 올려주세요`);
 }
 
 /* ---------- 시작 ---------- */

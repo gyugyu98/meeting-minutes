@@ -1,4 +1,4 @@
-// 회의록 양식: 저장, 파일에서 읽기(md·txt·docx·hwp·hwpx), 마크다운 ↔ 화면 변환, 한글 양식(hwpx)에 채우기
+// 회의록 양식: 저장, 파일에서 읽기(md·txt·docx·hwp·hwpx), 마크다운 ↔ 화면 변환, 양식 파일(hwpx·docx)에 채우기
 
 /* ---------- 저장 (이 브라우저에만) ---------- */
 const TPL_KEY = 'mm_templates', TPL_SEL = 'mm_template_selected';
@@ -9,7 +9,7 @@ function saveTemplates(list) {
 }
 function selectedTemplateId() { try { return localStorage.getItem(TPL_SEL) || 'default'; } catch (e) { return 'default'; } }
 function selectTemplateId(id) { try { localStorage.setItem(TPL_SEL, id); } catch (e) {} }
-// t: { id?, name, body, file?: { name, hwpx(base64) } }
+// t: { id?, name, body, file?: { name, kind: 'hwpx' | 'docx', data(base64) } }
 function upsertTemplate(t) {
   const list = loadTemplates();
   const item = { id: t.id || 't' + Date.now().toString(36), name: t.name, body: t.body, ...(t.file ? { file: t.file } : {}) };
@@ -30,7 +30,7 @@ function loadScript(src) {
   });
 }
 const loadJSZip = () => loadScript('vendor/jszip.min.js');
-const loadHwpConvert = () => loadScript('vendor/hwp-convert.js');   // hwp → hwpx, 마크다운 → hwpx
+const loadHwpConvert = () => loadScript('vendor/hwp-convert.js');   // hwp 글자 읽기용 (hwp → hwpx)
 
 function bytesToB64(bytes) {
   let bin = '';
@@ -40,25 +40,18 @@ function bytesToB64(bytes) {
 const b64ToBytes = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 
 /* ---------- 파일 → 양식 ---------- */
-// 돌려주는 값: { body: 마크다운, hwpx?: Uint8Array } — hwp·hwpx는 서식을 그대로 둔 hwpx도 함께 돌려준다
+// 돌려주는 값: { body: 마크다운, file?: { kind, bytes } }
+// hwpx·docx는 원본 파일을 함께 돌려줘서, 나중에 그 파일에 글자만 채워 같은 형식으로 내려준다.
+// hwp는 브라우저에서 쓸 수 없고 hwpx로 바꾸는 과정에서 서식이 깨지므로(로고·머리 표) 글자 구성만 읽는다.
 async function templateFromFile(file) {
   const ext = (file.name.split('.').pop() || '').toLowerCase();
   if (ext === 'md' || ext === 'txt') return { body: (await file.text()).trim() };
   const buf = new Uint8Array(await file.arrayBuffer());
-  if (ext === 'docx') {
-    await loadScript('vendor/mammoth.browser.min.js');
-    const { value } = await window.mammoth.convertToHtml({ arrayBuffer: buf.buffer });
-    const box = document.createElement('div');
-    box.innerHTML = value;
-    return { body: htmlToMd(box).trim() };
-  }
-  if (ext === 'hwp' || ext === 'hwpx') {
-    let hwpx = buf;
-    if (ext === 'hwp') {
-      await loadHwpConvert();
-      hwpx = await window.HwpConvert.hwpToHwpx(buf, { title: file.name.replace(/\.[^.]+$/, '') });
-    }
-    return { body: (await hwpxToMd(hwpx)).trim(), hwpx };
+  if (ext === 'hwpx' || ext === 'docx') return { body: (await formToMd(await openDoc(buf, ext))).trim(), file: { kind: ext, bytes: buf } };
+  if (ext === 'hwp') {
+    await loadHwpConvert();
+    const hwpx = await window.HwpConvert.hwpToHwpx(buf, { title: file.name.replace(/\.[^.]+$/, '') });
+    return { body: (await formToMd(await openDoc(hwpx, 'hwpx'))).trim(), hwpOnly: true };
   }
   throw new Error('md, txt, docx, hwp, hwpx 파일만 읽을 수 있습니다');
 }
@@ -73,18 +66,33 @@ function mdTable(rows) {
   return [line(rows[0]), '|' + ' --- |'.repeat(cols), ...rows.slice(1).map(line)].join('\n');
 }
 
-/* ---------- hwpx 읽기 ---------- */
+/* ---------- 양식 파일(hwpx·docx) 열기 ---------- */
+// 두 형식의 같은 역할 요소 이름 (네임스페이스 접두어는 떼고 localName으로 비교)
+const KIND = {
+  hwpx: { run: 'run', t: 't', parts: n => /^Contents\/section\d+\.xml$/i.test(n) },
+  docx: { run: 'r', t: 't', parts: n => n === 'word/document.xml' },
+};
 const kids = (el, name) => [...el.children].filter(c => c.localName === name);
 const inside = (node, name, stop) => { for (let n = node.parentElement; n && n !== stop; n = n.parentElement) if (n.localName === name) return n; return null; };
+const OBJECT = /^(pic|ole|equation|drawing|pict|object|container|rect|ellipse|line|txbxContent)$/;
+async function openDoc(bytes, kind) {
+  await loadJSZip();
+  const zip = await window.JSZip.loadAsync(bytes);
+  const names = Object.keys(zip.files).filter(KIND[kind].parts).sort((a, b) => (parseInt(a.match(/\d+/)) || 0) - (parseInt(b.match(/\d+/)) || 0));
+  if (!names.length) throw new Error('문서 본문을 찾지 못했습니다');
+  const parts = [];
+  for (const n of names) parts.push({ name: n, doc: new DOMParser().parseFromString(await zip.file(n).async('string'), 'application/xml') });
+  return { kind, zip, parts };
+}
 // 문단의 글자 (안쪽 표의 글자는 빼고, 줄바꿈은 \n)
 function paraText(p) {
   let s = '';
   const visit = el => {
     for (const c of el.childNodes) {
-      if (c.nodeType === 3) { if (inside(c, 't', p)) s += c.textContent; continue; }
+      if (c.nodeType === 3) { if (c.parentElement?.localName === 't') s += c.textContent; continue; }
       if (c.nodeType !== 1) continue;
-      if (c.localName === 'tbl') continue;
-      if (c.localName === 'lineBreak') { s += '\n'; continue; }
+      if (c.localName === 'tbl' || c.localName === 'rPr' || c.localName === 'pPr') continue;
+      if (c.localName === 'lineBreak' || c.localName === 'br' || c.localName === 'cr') { s += '\n'; continue; }
       if (c.localName === 'tab') { s += '\t'; continue; }
       visit(c);
     }
@@ -92,45 +100,65 @@ function paraText(p) {
   visit(p);
   return s;
 }
-async function openHwpx(bytes) {
-  await loadJSZip();
-  const zip = await window.JSZip.loadAsync(bytes);
-  const names = Object.keys(zip.files).filter(n => /^Contents\/section\d+\.xml$/i.test(n))
-    .sort((a, b) => parseInt(a.match(/\d+/)) - parseInt(b.match(/\d+/)));
-  const sections = [];
-  for (const n of names) sections.push({ name: n, doc: new DOMParser().parseFromString(await zip.file(n).async('string'), 'application/xml') });
-  return { zip, sections };
+const hasObject = el => [...el.getElementsByTagNameNS('*', '*')].some(k => OBJECT.test(k.localName));
+const attr = (el, name) => el && [...el.attributes].find(a => a.localName === name)?.value;
+
+// 표 하나를 칸 목록으로: { el, sub(문단이 들어 있는 요소), paras, row, col, colSpan, rowSpan, merged(위 칸에 합쳐진 빈 칸) }
+function tableCells(tbl, kind) {
+  const cells = [];
+  kids(tbl, 'tr').forEach((tr, row) => {
+    let col = 0;
+    for (const tc of kids(tr, 'tc')) {
+      if (kind === 'hwpx') {
+        const addr = tc.getElementsByTagNameNS('*', 'cellAddr')[0], span = tc.getElementsByTagNameNS('*', 'cellSpan')[0];
+        const sub = kids(tc, 'subList')[0] || tc;
+        cells.push({ el: tc, sub, paras: kids(sub, 'p'), row: +attr(addr, 'rowAddr') || 0, col: +attr(addr, 'colAddr') || 0, colSpan: +attr(span, 'colSpan') || 1, rowSpan: +attr(span, 'rowSpan') || 1 });
+      } else {
+        const tcPr = kids(tc, 'tcPr')[0];
+        const colSpan = +attr(tcPr && kids(tcPr, 'gridSpan')[0], 'val') || 1;
+        const vm = tcPr && kids(tcPr, 'vMerge')[0];
+        cells.push({ el: tc, sub: tc, paras: kids(tc, 'p'), row, col, colSpan, rowSpan: 1, vMerge: vm ? (attr(vm, 'val') || 'continue') : null });
+        col += colSpan;
+      }
+    }
+  });
+  if (kind === 'docx') {   // 세로 병합: restart 칸의 rowSpan을 세고, 이어지는 칸은 merged로 표시
+    for (const c of cells) {
+      if (c.vMerge === 'continue') { c.merged = true; continue; }
+      if (c.vMerge === 'restart') { let r = c.row + 1; while (cells.some(d => d.row === r && d.col === c.col && d.vMerge === 'continue')) r++; c.rowSpan = r - c.row; }
+    }
+  }
+  return cells;
 }
 
-// 양식 글(마크다운)로: 표는 표로, 문단이 많은 큰 칸은 표 아래에 문단 그대로 풀어 쓴다
+/* ---------- 양식 → 화면용 양식 글(마크다운) ---------- */
 // 회의록 양식은 대개 "머리글 칸 | 값 칸"이 짝을 이루는 서식표와, 내용이 여러 문단으로 들어가는 큰 칸으로 되어 있다.
 // 표를 마크다운 표로 옮기면 내용 구성("1. 회의 목적" 등)이 표의 행처럼 보여 양식이 깨지므로,
 // 머리글 칸은 "- 일시: 값" 목록으로, 큰 칸의 문단은 제목·목록이 있는 본문으로 옮긴다.
-async function hwpxToMd(bytes) {
-  const { sections } = await openHwpx(bytes);
+async function formToMd(pack) {
   const out = [];
   const compact = s => s.replace(/\s+/g, '');
   const isLabel = t => t && compact(t).length <= 6 && !/[.:,0-9]/.test(t);
   const table = tbl => {
-    for (const tr of kids(tbl, 'tr')) {
-      const cells = kids(tr, 'tc').map(tc => {
-        const paras = kids(kids(tc, 'subList')[0] || tc, 'p');
-        const hasObject = paras.some(p => [...p.getElementsByTagNameNS('*', '*')].some(k => /^(pic|tbl|ole|equation)$/.test(k.localName)));
-        const lines = paras.map(paraText).map(s => s.replace(/\s+$/, ''));
-        const span = tc.getElementsByTagNameNS('*', 'cellSpan')[0];
-        return { lines, text: lines.filter(l => l.trim()).join(' ').trim(), many: lines.filter(l => l.trim()).length > 3, hasObject, rowSpan: +span?.getAttribute('rowSpan') || 1 };
-      });
-      for (let k = 0; k < cells.length; k++) {
-        const c = cells[k];
+    const cells = tableCells(tbl, pack.kind).filter(c => !c.merged).map(c => {
+      const lines = c.paras.map(paraText).map(s => s.replace(/\s+$/, ''));
+      const filled = lines.filter(l => l.trim()).length;
+      // 내용 칸: 글 있는 문단이 많거나, 빈 양식처럼 제목 몇 줄과 빈 줄로 된 여러 문단 칸
+      return { ...c, lines, text: lines.filter(l => l.trim()).join(' ').trim(), many: filled > 3 || (filled >= 2 && lines.length >= 3) };
+    });
+    const rows = [...new Set(cells.map(c => c.row))].sort((a, b) => a - b).map(r => cells.filter(c => c.row === r).sort((a, b) => a.col - b.col));
+    for (const rowCells of rows) {
+      for (let k = 0; k < rowCells.length; k++) {
+        const c = rowCells[k];
         if (c.many) { out.push('', ...contentLines(c.lines), ''); continue; }   // 내용 칸: 본문 구성 그대로
         if (!c.text) continue;
         if (c.rowSpan > 1) { out.push(`# ${c.text}`, ''); continue; }   // 여러 행을 차지하는 칸 = 문서 제목
-        if (isLabel(c.text) && k + 1 < cells.length && !cells[k + 1].many) {   // 머리글 | 값
-          out.push(`- ${compact(c.text)}: ${cells[k + 1].text}`);
+        if (isLabel(c.text) && k + 1 < rowCells.length && !rowCells[k + 1].many) {   // 머리글 | 값
+          out.push(`- ${compact(c.text)}: ${rowCells[k + 1].text}`);
           k++;
           continue;
         }
-        if (isLabel(c.text) && cells.length === 1) { out.push('', `## ${compact(c.text)}`); continue; }   // 한 줄을 다 차지하는 머리글(예: 내 용)
+        if (isLabel(c.text) && rowCells.length === 1) { out.push('', `## ${compact(c.text)}`); continue; }   // 한 줄을 다 차지하는 머리글(예: 내 용)
         out.push(c.text);
       }
     }
@@ -159,47 +187,44 @@ async function hwpxToMd(bytes) {
       if (c.localName === 'p') {
         const t = paraText(c).trim();
         if (t) out.push(t);
-        [...c.getElementsByTagNameNS('*', 'tbl')].filter(t2 => !inside(t2, 'tbl', c)).forEach(table);
+        [...c.getElementsByTagNameNS('*', 'tbl')].filter(t2 => !inside(t2, 'tbl', c)).forEach(table);   // 한글은 표가 문단 안에 있다
         continue;
       }
       walk(c);
     }
   };
-  for (const s of sections) walk(s.doc.documentElement);
+  for (const p of pack.parts) walk(p.doc.documentElement);
   return out.join('\n').replace(/\n{3,}/g, '\n\n');
 }
 
-/* ---------- 한글 양식(hwpx)에 채우기 ---------- */
+/* ---------- 양식 파일에 채우기 ---------- */
 // 양식의 칸(C번호)과 문단(P번호)을 목록으로 만든다. Gemini는 이 목록을 보고 어느 칸에 어떤 문단을 넣을지 정한다.
-async function hwpxInventory(bytes) {
-  const pack = await openHwpx(bytes);
-  const cells = [], paras = [];
+async function docInventory(bytes, kind) {
+  const pack = await openDoc(bytes, kind);
+  const R = KIND[kind];
+  const cells = [], paras = [], lines = [];
   let tableNo = 0;
-  const lines = [];
-  for (const s of pack.sections) {
-    for (const tc of s.doc.getElementsByTagNameNS('*', 'tc')) {
-      const tbl = inside(tc, 'tbl', null);
-      if (!tbl.__no) tbl.__no = ++tableNo;
-      const addr = tc.getElementsByTagNameNS('*', 'cellAddr')[0];
-      const span = tc.getElementsByTagNameNS('*', 'cellSpan')[0];
-      const sub = kids(tc, 'subList')[0] || tc;
-      const row = +addr?.getAttribute('rowAddr') || 0, col = +addr?.getAttribute('colAddr') || 0;
-      const cell = { id: 'C' + (cells.length + 1), el: tc, sub, paras: [], tbl: tbl.__no, row, col, colSpan: +span?.getAttribute('colSpan') || 1 };
-      cells.push(cell);
-      const ps = kids(sub, 'p');
-      // 왼쪽 칸이 작성자·부서 같은 머리글이면 이 칸은 회의와 상관없는 고정 정보라 바꾸지 않는다
-      const left = cells.find(c => c.tbl === cell.tbl && c.row === row && c.col + c.colSpan === col);
-      const label = left ? left.paras.map(p => paraText(p.el)).join('').replace(/\s+/g, '') : '';
-      cell.fixed = /^(작성자|부서|소속|직위|직급|결재|서명|확인|비고|담당자)$/.test(label);
-      lines.push(`${cell.id} (표${tbl.__no} ${row + 1}행 ${col + 1}열${span && (span.getAttribute('colSpan') !== '1' || span.getAttribute('rowSpan') !== '1') ? `, ${span.getAttribute('rowSpan')}×${span.getAttribute('colSpan')} 병합` : ''})${cell.fixed ? ' [바꾸지 않음]' : ''}`);
-      for (const p of ps) {
-        const runs = kids(p, 'run');
-        const textRuns = runs.filter(r => !r.querySelector('*') || [...r.children].every(k => k.localName === 't'));
-        const objects = runs.some(r => [...r.children].some(k => k.localName !== 't'));
-        const para = { id: 'P' + (paras.length + 1), el: p, cell: cell.id, usable: !objects && runs.length > 0 };
-        paras.push(para); cell.paras.push(para);
-        const parts = textRuns.map(r => paraText(r).replace(/\n/g, '⏎'));
-        lines.push(objects ? `  ${para.id}: [그림·개체]` : `  ${para.id}: ` + (parts.length > 1 ? parts.map((t, k) => `조각${k + 1}"${t}"`).join(' + ') : `"${parts[0] || ''}"`));
+  for (const part of pack.parts) {
+    for (const tbl of part.doc.getElementsByTagNameNS('*', 'tbl')) {
+      tableNo++;
+      const tcs = tableCells(tbl, kind);
+      for (const tc of tcs) {
+        if (tc.merged) continue;
+        const cell = { ...tc, id: 'C' + (cells.length + 1), tbl: tableNo, paras: [] };
+        cells.push(cell);
+        // 왼쪽 칸이 작성자·부서 같은 머리글이면 이 칸은 회의와 상관없는 고정 정보라 바꾸지 않는다
+        const left = tcs.find(c => !c.merged && c.row === tc.row && c.col + c.colSpan === tc.col);
+        const label = left ? left.paras.map(paraText).join('').replace(/\s+/g, '') : '';
+        cell.fixed = /^(작성자|부서|소속|직위|직급|결재|서명|확인|비고|담당자)$/.test(label);
+        lines.push(`${cell.id} (표${tableNo} ${tc.row + 1}행 ${tc.col + 1}열${tc.colSpan > 1 || tc.rowSpan > 1 ? `, ${tc.rowSpan}×${tc.colSpan} 병합` : ''})${cell.fixed ? ' [바꾸지 않음]' : ''}`);
+        for (const p of tc.paras) {
+          const runs = kids(p, R.run);
+          const objects = hasObject(p);
+          const para = { id: 'P' + (paras.length + 1), el: p, cell: cell.id, usable: !objects };
+          paras.push(para); cell.paras.push(para);
+          const parts = runs.filter(r => !hasObject(r)).map(r => paraText(r).replace(/\n/g, '⏎')).filter((t, k, a) => t || a.length === 1);
+          lines.push(objects ? `  ${para.id}: [그림·개체]` : `  ${para.id}: ` + (parts.length > 1 ? parts.map((t, k) => `조각${k + 1}"${t}"`).join(' + ') : `"${parts[0] || ''}"`));
+        }
       }
     }
   }
@@ -207,50 +232,65 @@ async function hwpxInventory(bytes) {
 }
 
 // plan: { cells: [{ cell: 'C5', paragraphs: [{ like: 'P13', parts: ['…'] }] }] }
-async function fillHwpx(bytes, plan) {
-  const inv = await hwpxInventory(bytes);
+// 원본 파일을 그대로 두고, 계획에 든 칸의 문단만 견본 문단을 복제해 글자를 바꾼다.
+async function fillDoc(bytes, kind, plan) {
+  const inv = await docInventory(bytes, kind);
   const cellById = Object.fromEntries(inv.cells.map(c => [c.id, c]));
   const paraById = Object.fromEntries(inv.paras.map(p => [p.id, p]));
-  // 새 문단 번호는 문서 전체(표 밖 문단 포함)에서 겹치지 않게 매긴다
-  const allIds = inv.pack.sections.flatMap(s => [...s.doc.getElementsByTagNameNS('*', 'p')].map(p => parseInt(p.getAttribute('id')) || 0));
+  // 한글 문단 id는 문서 전체(표 밖 문단 포함)에서 겹치지 않게 매긴다
+  const allIds = inv.pack.parts.flatMap(s => [...s.doc.getElementsByTagNameNS('*', 'p')].map(p => parseInt(p.getAttribute('id')) || 0));
   let nextId = Math.max(0, ...allIds) + 1;
   for (const change of plan.cells || []) {
     const cell = cellById[change.cell];
     if (!cell || cell.fixed || !Array.isArray(change.paragraphs) || !change.paragraphs.length) continue;
     // 문단 모양 견본: 지정한 문단이 쓸 수 없으면 그 칸의 첫 글자 문단을 쓴다
     const fallback = cell.paras.find(p => p.usable) || inv.paras.find(p => p.usable);
-    const made = normalizeParagraphs(change.paragraphs, paraById).map(np => {
+    const made = normalizeParagraphs(change.paragraphs, paraById, kind).map(np => {
       const like = (paraById[np.like]?.usable ? paraById[np.like] : fallback);
-      return like ? cloneWithText(like.el, np.parts, nextId++) : null;
+      return like ? cloneWithText(like.el, np.parts, kind, nextId++) : null;
     }).filter(Boolean);
     if (!made.length) continue;
+    // 칸 안의 문단만 갈아 끼운다 (칸 속성 tcPr 등은 그대로)
+    const anchor = cell.paras.at(-1).el.nextSibling;
     cell.paras.forEach(p => p.el.remove());
-    made.forEach(p => cell.sub.append(p));
+    made.forEach(p => cell.sub.insertBefore(p, anchor));
+    // 워드: 한글이 내보낸 docx는 내용 칸 행에 큰 최소 높이(한 쪽 가득)가 걸려 있는데, 워드는 줄 간격 계산이 달라
+    // 그 높이가 한 쪽을 넘쳐 다음 쪽으로 밀린다. 내용을 채운 행은 높이를 내용에 맡기고, 쪽을 넘어 이어지게 한다.
+    if (kind === 'docx') {
+      const trPr = kids(cell.el.parentElement, 'trPr')[0];
+      if (trPr) {
+        kids(trPr, 'trHeight').filter(h => +attr(h, 'val') > 2000).forEach(h => h.remove());
+        kids(trPr, 'cantSplit').forEach(c => c.remove());
+      }
+    }
   }
-  const { zip, sections } = inv.pack;
+  const { zip, parts } = inv.pack;
   const ser = new XMLSerializer();
-  for (const s of sections) zip.file(s.name, ser.serializeToString(s.doc));
-  // 탐색기 미리보기 글도 새 내용으로
-  if (zip.file('Preview/PrvText.txt')) {
-    const text = sections.map(s => [...s.doc.getElementsByTagNameNS('*', 'p')].map(paraText).filter(t => t.trim()).join('\r\n')).join('\r\n');
+  const decl = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  for (const s of parts) {
+    const xml = ser.serializeToString(s.doc);
+    zip.file(s.name, xml.startsWith('<?xml') ? xml : decl + xml);
+  }
+  if (kind === 'hwpx' && zip.file('Preview/PrvText.txt')) {   // 탐색기 미리보기 글도 새 내용으로
+    const text = parts.map(s => [...s.doc.getElementsByTagNameNS('*', 'p')].map(paraText).filter(t => t.trim()).join('\r\n')).join('\r\n');
     zip.file('Preview/PrvText.txt', text.slice(0, 1000));
   }
-  // hwpx 규칙: mimetype이 맨 앞, 압축하지 않음
+  // 원래 순서대로 다시 묶는다. hwpx는 mimetype이 맨 앞, 압축하지 않음
   const out = new window.JSZip();
-  const order = Object.keys(zip.files).filter(n => !zip.files[n].dir);
-  out.file('mimetype', await zip.file('mimetype').async('uint8array'), { compression: 'STORE', createFolders: false });
-  for (const n of order) if (n !== 'mimetype') out.file(n, await zip.file(n).async('uint8array'), { createFolders: false });
-  return await out.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/hwp+zip' });
+  for (const n of Object.keys(zip.files).filter(n => !zip.files[n].dir)) {
+    out.file(n, await zip.file(n).async('uint8array'), { createFolders: false, ...(n === 'mimetype' ? { compression: 'STORE' } : {}) });
+  }
+  return await out.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: kind === 'hwpx' ? 'application/hwp+zip' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
 }
 
-// Gemini가 준 문단을 한글에 맞게 다듬는다:
+// Gemini가 준 문단을 문서에 맞게 다듬는다:
 // 마크다운 기호(**, [ ])를 빼고, 한 문단에 여러 목록 항목("  - …  - …")을 이어 쓴 경우 항목마다 문단을 나눈다.
-function normalizeParagraphs(list, paraById) {
+function normalizeParagraphs(list, paraById, kind) {
   const clean = s => String(s ?? '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/(^|\s)-\s\[[ xX]\]\s*/g, '$1- ').replace(/^\s*\[[ xX]\]\s*/, '');
   const out = [];
   for (const np of list) {
     const parts = (Array.isArray(np.parts) ? np.parts : [np.parts]).map(clean);
-    const likeRuns = paraById[np.like] ? kids(paraById[np.like].el, 'run').length : 1;
+    const likeRuns = paraById[np.like] ? kids(paraById[np.like].el, KIND[kind].run).filter(r => paraText(r)).length : 1;
     if (parts.length === 1 && likeRuns <= 1) {
       const items = parts[0].split(/(?<=\S)\s{2,}(?=-\s)/);   // "  - 가  - 나" → "  - 가", "- 나"
       if (items.length > 1) {
@@ -265,30 +305,62 @@ function normalizeParagraphs(list, paraById) {
 }
 
 // 견본 문단을 복제해 글자만 바꾼다. 글자 조각(parts)은 견본의 글자 모양 조각(run)에 차례로 넣는다.
-function cloneWithText(src, parts, id) {
+function cloneWithText(src, parts, kind, id) {
   const p = src.cloneNode(true);
-  p.setAttribute('id', String(id));
-  kids(p, 'linesegarray').forEach(x => x.remove());   // 줄 배치 정보는 한글이 다시 계산한다
-  const runs = kids(p, 'run');
-  const ns = src.namespaceURI, prefix = src.prefix ? src.prefix + ':' : '';
+  const doc = src.ownerDocument, ns = src.namespaceURI, prefix = src.prefix ? src.prefix + ':' : '';
+  const R = KIND[kind];
+  if (kind === 'hwpx') {
+    p.setAttribute('id', String(id));
+    kids(p, 'linesegarray').forEach(x => x.remove());   // 줄 배치 정보는 한글이 다시 계산한다
+  } else {
+    // 워드: 문단 고유번호는 겹치면 안 되므로 지우고, 책갈피·맞춤법 표시 같은 부속 요소도 뺀다
+    [...p.attributes].filter(a => /^(paraId|textId|rsidR|rsidRDefault|rsidP)$/.test(a.localName)).forEach(a => p.removeAttributeNode(a));
+    [...p.children].filter(c => c.localName !== 'pPr' && c.localName !== 'r').forEach(c => c.remove());
+  }
+  let runs = kids(p, R.run);
+  runs.filter(r => hasObject(r)).forEach(r => r.remove());
+  runs = kids(p, R.run);
+  // 글자 조각이 없는 견본(빈 문단): 문단 끝 글자 모양으로 조각을 하나 만든다
+  if (!runs.length) {
+    const r = doc.createElementNS(ns, prefix + R.run);
+    if (kind === 'hwpx') r.setAttribute('charPrIDRef', '0');
+    else { const mark = p.getElementsByTagNameNS(ns, 'rPr')[0]; if (mark) r.append(mark.cloneNode(true)); }
+    p.append(r);
+    runs = [r];
+  }
+  // 글자가 있는 조각만 채울 자리로 쓰고, 빈 조각은 지운다(첫 조각은 남김)
+  const textRuns = runs.filter(r => paraText(r));
+  const slots = textRuns.length ? textRuns : [runs[0]];
+  runs.filter(r => !slots.includes(r)).forEach(r => r.remove());
   if (!parts.length) parts = [''];
   parts = parts.map(s => String(s ?? '').replace(/⏎/g, '\n'));
-  runs.forEach((r, k) => {
+  slots.forEach((r, k) => {
     if (k >= parts.length) { if (k > 0) r.remove(); else setRunText(r, ''); return; }
-    let text = k === runs.length - 1 ? parts.slice(k).join('') : parts[k];
+    let text = k === slots.length - 1 ? parts.slice(k).join('') : parts[k];
     // 견본 조각이 줄바꿈으로 끝나면(예: 굵은 안건 ⏎ 세부 내용) 새 글자도 같은 자리에서 줄을 바꾼다
-    if (k < runs.length - 1 && /\n$/.test(paraText(r)) && !/\n$/.test(text) && parts[k + 1]) text += '\n';
+    if (k < slots.length - 1 && /\n$/.test(paraText(r)) && !/\n$/.test(text) && parts[k + 1]) text += '\n';
     setRunText(r, text);
   });
   function setRunText(r, text) {
-    [...r.childNodes].forEach(c => c.remove());
+    [...r.childNodes].filter(c => !(c.nodeType === 1 && c.localName === 'rPr')).forEach(c => c.remove());
     if (!text) return;
-    const t = r.ownerDocument.createElementNS(ns, prefix + 't');
-    String(text).split('\n').forEach((piece, k) => {
-      if (k) t.append(r.ownerDocument.createElementNS(ns, prefix + 'lineBreak'));
-      if (piece) t.append(r.ownerDocument.createTextNode(piece));
-    });
-    r.append(t);
+    const pieces = String(text).split('\n');
+    if (kind === 'hwpx') {
+      const t = doc.createElementNS(ns, prefix + 't');
+      pieces.forEach((piece, k) => {
+        if (k) t.append(doc.createElementNS(ns, prefix + 'lineBreak'));
+        if (piece) t.append(doc.createTextNode(piece));
+      });
+      r.append(t);
+    } else {
+      pieces.forEach((piece, k) => {
+        if (k) r.append(doc.createElementNS(ns, prefix + 'br'));
+        const t = doc.createElementNS(ns, prefix + 't');
+        t.setAttributeNS('http://www.w3.org/XML/1998/namespace', 'xml:space', 'preserve');
+        t.append(doc.createTextNode(piece));
+        r.append(t);
+      });
+    }
   }
   return p;
 }
