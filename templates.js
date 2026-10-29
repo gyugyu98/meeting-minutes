@@ -365,6 +365,66 @@ function cloneWithText(src, parts, kind, id) {
   return p;
 }
 
+/* ---------- 기본 서식 파일 (양식 파일이 없을 때) ---------- */
+// 한글(.hwpx): hwp-convert로 만든다. 하위 목록 들여쓰기·인용 기호·체크박스는 미리 글자로 바꿔 둔다(한글로 열어 확인함).
+async function basicHwpx(md, title) {
+  await loadHwpConvert();
+  const prepared = md.split('\n').map(l => l
+    .replace(/^(\s{2,})[-*]\s+/, (m, sp) => '　'.repeat(Math.ceil(sp.length / 2)) + '· ')
+    .replace(/^[-*]\s+\[\s\]\s*/, '☐ ').replace(/^[-*]\s+\[[xX]\]\s*/, '☑ ')
+    .replace(/^>\s?/, '')).join('\n');
+  return await window.HwpConvert.markdownToHwpx(prepared, { title });
+}
+
+// 워드(.docx): 마크다운을 화면과 같은 구조로 풀어 최소한의 OOXML 문서를 만든다
+async function basicDocx(md, title) {
+  await loadJSZip();
+  const xesc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const runs = (el, base = {}) => [...el.childNodes].flatMap(n => {
+    if (n.nodeType === 3) return n.textContent ? [{ t: n.textContent, ...base }] : [];
+    if (n.nodeType !== 1 || /^(UL|OL|TABLE)$/.test(n.tagName)) return [];
+    if (n.tagName === 'BR') return [{ br: true }];
+    return runs(n, n.tagName === 'STRONG' || n.tagName === 'B' ? { ...base, b: true } : base);
+  });
+  const r = x => x.br ? '<w:r><w:br/></w:r>' : `<w:r>${x.b ? '<w:rPr><w:b/></w:rPr>' : ''}<w:t xml:space="preserve">${xesc(x.t)}</w:t></w:r>`;
+  const p = (rs, { style, ind, shade } = {}) => `<w:p><w:pPr>${style ? `<w:pStyle w:val="${style}"/>` : ''}${ind ? `<w:ind w:left="${ind}" w:hanging="240"/>` : ''}${shade ? '<w:shd w:val="clear" w:color="auto" w:fill="F1F2F5"/>' : ''}</w:pPr>${rs.map(r).join('')}</w:p>`;
+  const body = [];
+  const list = (el, depth) => {
+    let k = 0;
+    for (const li of el.children) {
+      if (li.tagName !== 'LI') continue;
+      k++;
+      body.push(p([{ t: el.tagName === 'OL' ? `${k}. ` : depth ? '· ' : '• ' }, ...runs(li)], { ind: 360 * (depth + 1) }));
+      for (const sub of li.children) if (sub.tagName === 'UL' || sub.tagName === 'OL') list(sub, depth + 1);
+    }
+  };
+  const box = document.createElement('div');
+  box.innerHTML = mdToHtml(md);
+  for (const el of box.children) {
+    const h = el.tagName.match(/^H([1-6])$/);
+    if (h) body.push(p(runs(el), { style: 'Heading' + Math.min(+h[1], 3) }));
+    else if (el.tagName === 'UL' || el.tagName === 'OL') list(el, 0);
+    else if (el.tagName === 'BLOCKQUOTE') body.push(p(runs(el), { shade: true }));
+    else if (el.tagName === 'TABLE') {
+      const rows = [...el.querySelectorAll('tr')];
+      const border = '<w:top w:val="single" w:sz="4" w:color="BFC4CE"/><w:left w:val="single" w:sz="4" w:color="BFC4CE"/><w:bottom w:val="single" w:sz="4" w:color="BFC4CE"/><w:right w:val="single" w:sz="4" w:color="BFC4CE"/><w:insideH w:val="single" w:sz="4" w:color="BFC4CE"/><w:insideV w:val="single" w:sz="4" w:color="BFC4CE"/>';
+      body.push(`<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>${border}</w:tblBorders></w:tblPr>` +
+        rows.map((tr, i) => `<w:tr>${[...tr.children].map(td => `<w:tc><w:tcPr>${i ? '' : '<w:shd w:val="clear" w:color="auto" w:fill="F1F2F5"/>'}</w:tcPr>${p(runs(td, i ? {} : { b: true }))}</w:tc>`).join('')}</w:tr>`).join('') + '</w:tbl>', p([]));
+    } else if (el.tagName === 'HR') body.push(p([]));
+    else body.push(p(runs(el)));
+  }
+  const font = '<w:rFonts w:ascii="Malgun Gothic" w:hAnsi="Malgun Gothic" w:eastAsia="맑은 고딕" w:cs="Malgun Gothic"/>';
+  const hs = (id, size, before) => `<w:style w:type="paragraph" w:styleId="${id}"><w:name w:val="heading ${id.slice(-1)}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="${before}" w:after="80"/><w:outlineLvl w:val="${+id.slice(-1) - 1}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${size}"/></w:rPr></w:style>`;
+  const zip = new window.JSZip();
+  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>');
+  zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>');
+  zip.file('docProps/core.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${xesc(title)}</dc:title></cp:coreProperties>`);
+  zip.file('word/_rels/document.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
+  zip.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr>${font}<w:sz w:val="21"/><w:lang w:val="ko-KR" w:eastAsia="ko-KR"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="60" w:line="300" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>${hs('Heading1', 32, 120)}${hs('Heading2', 26, 280)}${hs('Heading3', 22, 200)}</w:styles>`);
+  zip.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body.join('')}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1418" w:right="1418" w:bottom="1418" w:left="1418" w:header="851" w:footer="851" w:gutter="0"/></w:sectPr></w:body></w:document>`);
+  return await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+}
+
 /* ---------- 화면(HTML) → 마크다운 ---------- */
 function htmlToMd(root) {
   const inline = el => [...el.childNodes].map(n => {

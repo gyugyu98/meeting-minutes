@@ -82,6 +82,14 @@
         </div>
         <span class="hint">어느 수준이든 결론과 Task는 빠짐없이 담고, 회의가 길수록 회의록도 길어집니다.</span>
       </fieldset>
+      <fieldset class="field level" style="grid-column:1/-1">
+        <legend>정리 스타일</legend>
+        <div class="seg">
+          <input type="radio" name="style" id="stSpeaker" value="발언자별" checked><label for="stSpeaker"><b>발언자별</b><span>안건마다 누가 어떤 의견을 냈는지 사람별로 묶음</span></label>
+          <input type="radio" name="style" id="stTopic" value="안건별 요약"><label for="stTopic"><b>안건별 요약</b><span>사람 구분 없이 안건마다 논의 요점만 정리</span></label>
+          <input type="radio" name="style" id="stFlow" value="흐름순"><label for="stFlow"><b>흐름순</b><span>논의가 오간 순서대로 제기 → 반응 → 결론</span></label>
+        </div>
+      </fieldset>
       <div class="field" style="grid-column:1/-1">
         <label for="tplSelect">회의록 양식</label>
         <div class="row">
@@ -153,10 +161,11 @@
   <!-- 5. 회의록 -->
   <section class="view" data-view="result" hidden>
     <div class="redo-bar">
-      <span class="hint">양식 <b id="pTemplate"></b> · 정리 수준 <b id="pLevel"></b></span>
+      <span class="hint">양식 <b id="pTemplate"></b> · 수준 <b id="pLevel"></b> · 스타일 <b id="pStyle"></b></span>
       <span class="redo">
         <select class="input mini" id="redoTemplate" aria-label="다시 정리할 양식"></select>
         <select class="input mini" id="redoLevel" aria-label="다시 정리할 수준"><option>간단</option><option>보통</option><option>자세히</option></select>
+        <select class="input mini" id="redoStyle" aria-label="다시 정리할 스타일"><option>발언자별</option><option>안건별 요약</option><option>흐름순</option></select>
         <button class="btn ghost" id="redo" type="button">이대로 다시 정리</button>
       </span>
     </div>
@@ -209,7 +218,8 @@
 
     <div class="actions">
       <button class="btn ghost" id="newBtn" type="button">새 녹음</button>
-      <button class="btn" id="hwpxBtn" type="button">한글 파일(.hwpx)</button>
+      <select class="input mini dl-format" id="dlFormat" aria-label="내려받을 형식"></select>
+      <button class="btn" id="dlBtn" type="button">파일로 받기</button>
       <button class="btn" id="copyMd" type="button">마크다운 복사</button>
       <button class="btn primary" id="copyNotion" type="button">노션용 복사</button>
     </div>

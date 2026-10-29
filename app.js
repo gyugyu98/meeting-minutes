@@ -33,6 +33,7 @@ function newJob(file, duration) {
     audio: null,     // 30분 넘는 녹음을 자르려고 브라우저에서 풀어둔 소리
     meta: {
       title: $('#mTitle').value.trim(), date: $('#mDate').value, people: splitPeople($('#mPeople').value), level: $('input[name=level]:checked').value,
+      style: $('input[name=style]:checked')?.value || '발언자별',
       template: loadTemplates().find(t => t.id === $('#tplSelect').value) || null,   // null이면 기본 양식
     },
     segments: [], minutes: null, names: {},
@@ -337,12 +338,13 @@ const MINUTES_SCHEMA = {
   properties: {
     title: { type: 'STRING' },
     topic: { type: 'STRING' },
-    // 안건마다 한 줄 요약 + 발언자별 의견 묶음 (여러 사람 의견이 한 목록에 섞이지 않게)
+    // 안건마다 한 줄 요약 + (발언자별 스타일) 발언자별 의견 묶음 또는 (그 밖의 스타일) 요점 목록
     agendas: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
       title: { type: 'STRING' },
       summary: { type: 'STRING' },
       opinions: { type: 'ARRAY', items: { type: 'OBJECT', properties: { speaker: { type: 'STRING' }, points: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['speaker', 'points'] } },
-    }, required: ['title', 'summary', 'opinions'] } },
+      points: { type: 'ARRAY', items: { type: 'STRING' } },
+    }, required: ['title', 'summary'] } },
     conclusions: { type: 'ARRAY', items: { type: 'STRING' } },
     undecided: { type: 'ARRAY', items: { type: 'STRING' } },
     tasks: { type: 'ARRAY', items: { type: 'OBJECT', properties: { text: { type: 'STRING' }, owner: { type: 'STRING' }, due: { type: 'STRING' } }, required: ['text', 'owner', 'due'] } },
@@ -355,13 +357,31 @@ const MINUTES_SCHEMA = {
 const STYLE_RULE = `- 문장은 개조식으로 끝맺습니다. "~함", "~음", "~임" 또는 명사로 끝내고 "~습니다", "~했다", "~이다"는 쓰지 않습니다. 예: "9월까지 시스템 설계 상세화 확정 예정임", "데이터 양은 설계 인자 위주라 많지 않음", "수리계산 템플릿 정밀화 필요", "벡터 DB 파일럿 진행".`;
 
 const LEVELS = {
-  '간단': mins => `발언자마다 핵심 의견과 근거만 1~2개 씁니다. 전체 의견 항목은 ${Math.max(4, Math.round(mins * 0.3))}개 안팎입니다.`,
-  '보통': mins => `발언자마다 의견, 근거, 반론, 질문과 답변을 씁니다. 언급된 숫자·일정·이름·대안은 그대로 남깁니다. 전체 의견 항목은 최소 ${Math.max(8, Math.round(mins * 0.7))}개입니다.`,
-  '자세히': mins => `대화록을 읽지 않은 사람이 회의 내용을 거의 다 알 수 있을 만큼 촘촘하게 씁니다. 안건을 잘게 나누고, 발언자마다 주장, 근거, 예시, 질문과 답변, 반론, 의견이 바뀐 과정을 빠짐없이 적습니다. 언급된 숫자·일정·이름·사례·대안·우려 사항은 모두 남깁니다. 전체 의견 항목은 최소 ${Math.max(15, Math.round(mins * 1.5))}개이며, 내용이 더 있으면 더 써도 됩니다. 요약하느라 내용을 빼지 마세요.`,
+  '간단': mins => `핵심 의견과 근거만 씁니다. 전체 논의 항목은 ${Math.max(4, Math.round(mins * 0.3))}개 안팎입니다.`,
+  '보통': mins => `의견, 근거, 반론, 질문과 답변을 씁니다. 언급된 숫자·일정·이름·대안은 그대로 남깁니다. 전체 논의 항목은 최소 ${Math.max(8, Math.round(mins * 0.7))}개입니다.`,
+  '자세히': mins => `대화록을 읽지 않은 사람이 회의 내용을 거의 다 알 수 있을 만큼 촘촘하게 씁니다. 안건을 잘게 나누고, 주장, 근거, 예시, 질문과 답변, 반론, 의견이 바뀐 과정을 빠짐없이 적습니다. 언급된 숫자·일정·이름·사례·대안·우려 사항은 모두 남깁니다. 전체 논의 항목은 최소 ${Math.max(15, Math.round(mins * 1.5))}개이며, 내용이 더 있으면 더 써도 됩니다. 요약하느라 내용을 빼지 마세요.`,
 };
-// 읽기 쉬운 논의 구성: 안건 → 발언자 → 한 가지 내용씩 짧은 항목
-const READ_RULE = `- 논의 내용은 안건별로 나누고, 안건 안에서는 발언자별로 묶습니다. 한 항목에는 한 사람의 한 가지 내용만 씁니다. 여러 사람의 의견을 한 항목에 섞지 않습니다.
-- 항목은 짧게 끊어 씁니다(한 항목에 1~2문장). 질문과 답변은 묻는 사람 묶음에 "~ 질문", 답한 사람 묶음에 "~ 답변"으로 나눠 씁니다.`;
+// 정리 스타일: 논의 내용을 어떤 축으로 묶을지. agendas는 기본 양식의 출력 지시, rule은 기본·내 양식 공통 규칙.
+const STYLES = {
+  '발언자별': {
+    agendas: '안건마다 summary에 논의 결과를 한 문장으로 쓰고, opinions에 발언자별로 의견을 묶습니다(speaker는 화자 표기, points는 그 사람의 의견 항목들). 안건의 points는 쓰지 않습니다.',
+    rule: `- 논의 내용은 안건별로 나누고, 안건 안에서는 발언자별로 묶습니다. 한 항목에는 한 사람의 한 가지 내용만 씁니다. 여러 사람의 의견을 한 항목에 섞지 않습니다.
+- 항목은 짧게 끊어 씁니다(한 항목에 1~2문장). 질문과 답변은 묻는 사람 묶음에 "~ 질문", 답한 사람 묶음에 "~ 답변"으로 나눠 씁니다.`,
+  },
+  '안건별 요약': {
+    agendas: '안건마다 summary에 논의 결과를 한 문장으로 쓰고, points에 논의 요점을 항목으로 씁니다. opinions는 쓰지 않습니다.',
+    rule: `- 논의 내용은 안건별로 나누되 발언자별로 나누지 않고 내용 중심으로 요점을 정리합니다. 비슷한 의견은 하나로 합칩니다.
+- 누가 말했는지는 결정·담당·반대 의견처럼 사람이 중요한 경우에만 괄호로 덧붙입니다(예: "(화자2 제안)").
+- 한 항목에는 한 가지 요점만, 1~2문장으로 씁니다.`,
+  },
+  '흐름순': {
+    agendas: '안건마다 summary에 논의 결과를 한 문장으로 쓰고, points에 논의가 오간 순서대로 항목을 씁니다. opinions는 쓰지 않습니다.',
+    rule: `- 논의 내용은 안건별로 나누고, 안건 안에서는 논의가 오간 순서대로 씁니다. 항목마다 누가 무엇을 제기했고, 어떤 반응·반론이 나왔고, 어떻게 정리됐는지 흐름이 드러나게 씁니다.
+- 발언자를 문장 앞에 밝힙니다(예: "화자1이 격주 진행 제안함", "화자2가 실습 시간 부족 우려 제기함").
+- 한 항목에는 한 단계만, 1~2문장으로 씁니다.`,
+  },
+};
+const styleOf = () => STYLES[job.meta.style] ? job.meta.style : '발언자별';
 // 회의 길이(분). 녹음 길이를 모르면 대화록 글자 수로 어림한다(한국어 말 1분 ≈ 300자).
 function meetingMinutes(text) { return job.duration > 0 ? job.duration / 60 : text.length / 300; }
 
@@ -422,15 +442,17 @@ function summarize(level, first, useModel, onProgress) {
     const tplPrompt = `아래 [회의록 양식]에 맞춰 회의 대화록으로 회의록을 작성하세요. 회의록은 markdown 필드에 마크다운으로 씁니다.${mapRule}
 - 양식의 제목·소제목·항목 이름과 순서를 그대로 지킵니다. 양식에 없는 큰 제목을 새로 만들지 않습니다. 양식에 맞는 자리가 없는 중요한 내용은 가장 가까운 항목에 넣습니다.
 - 양식 안의 괄호 설명, 예시 문구, 빈칸 표시(○○, ___, "내용" 같은 자리 표시)는 그 칸에 무엇을 쓸지 알려주는 지침입니다. 실제 내용으로 바꿔 쓰고 지침 문구는 남기지 않습니다.
-- 양식이 이전 회의를 기록한 회의록이면, 그 내용(날짜·참석자·논의 내용)은 형식 참고용일 뿐이니 가져오지 말고 이번 회의 대화록으로 새로 씁니다. 발표자별로 묶는 형식이면 이번 회의의 화자별로 묶습니다.
+- 양식이 이전 회의를 기록한 회의록이면, 그 내용(날짜·참석자·논의 내용)은 형식 참고용일 뿐이니 가져오지 말고 이번 회의 대화록으로 새로 씁니다.
 - "- 일시: 값"처럼 머리 항목과 값으로 된 줄은 머리 항목은 그대로 두고 값만 이번 회의 것으로 바꿉니다. 문서 제목(# 줄)은 그대로 둡니다.
-- 양식의 내용 구성(예: "## 1. 회의 목적" 아래 목록, 발표자 소제목(###) 아래 굵은 안건과 하위 세부 내용)은 그 모양 그대로 따릅니다. 발표자 소제목 자리에는 이번 회의의 화자를 씁니다.
+${styleOf() === '발언자별'
+    ? '- 양식의 내용 구성(예: "## 1. 회의 목적" 아래 목록, 발표자 소제목(###) 아래 굵은 안건과 하위 세부 내용)은 그 모양 그대로 따릅니다. 발표자 소제목 자리에는 이번 회의의 화자를 씁니다.'
+    : `- 양식의 큰 구성(예: "## 1. 회의 목적", "## 2. 회의 내용")과 목록 모양은 그대로 따르되, 논의 내용은 양식의 발표자별 묶음 대신 아래 "${styleOf()}" 스타일로 씁니다. 안건 이름을 소제목(###)으로 씁니다.`}
 - 양식이 표인 곳은 마크다운 표로, 목록인 곳은 목록으로 씁니다. 표의 행 수는 내용에 맞게 늘리거나 줄입니다.
 - 할 일은 양식에 따로 표가 없으면 "- [ ] 할 일 (담당, 기한)" 체크박스 목록으로 씁니다.
 - 대화록에서 확인할 수 없는 항목(장소 등)은 지어내지 말고 "-"로 둡니다.
 - 사람을 가리킬 때는 화자 표기(화자1, 화자2 …)를 그대로 씁니다.
 ${STYLE_RULE}
-${READ_RULE}
+${STYLES[styleOf()].rule}
 - 논의 내용 분량: ${LEVELS[level](meetingMinutes(transcript))}
 - 할 일은 회의 중에 누군가 하겠다고 했거나 누구에게 맡긴 일만 씁니다. ${date ? '"다음 주 화요일"처럼 상대적인 기한은 회의 일시를 기준으로 MM/DD로 바꾸고 괄호 안에 원래 표현을 남깁니다.' : ''}
 - title: ${job.meta.title ? `"${job.meta.title}" 를 그대로 씁니다.` : '회의 내용을 나타내는 짧은 제목입니다.'} 양식에 회의 제목 자리가 있으면 그 자리에도 씁니다.
@@ -452,8 +474,8 @@ ${transcript}`;
 ${STYLE_RULE}
 - title: ${job.meta.title ? `"${job.meta.title}" 를 그대로 씁니다.` : '회의 내용을 나타내는 짧은 제목입니다.'}
 - topic: 회의의 목적과 주제를 ${level === '간단' ? '1~2' : '2~3'}문장으로 씁니다.
-- agendas: 다룬 안건별로 나눕니다. 안건마다 summary에 논의 결과를 한 문장으로 쓰고, opinions에 발언자별로 의견을 묶습니다(speaker는 화자 표기, points는 그 사람의 의견 항목들). ${LEVELS[level](meetingMinutes(transcript))}
-${READ_RULE}
+- agendas: 다룬 안건별로 나눕니다. ${STYLES[styleOf()].agendas} ${LEVELS[level](meetingMinutes(transcript))}
+${STYLES[styleOf()].rule}
 - conclusions: 회의에서 합의되거나 결정된 사항만 씁니다. 추측해서 만들지 않습니다.
 - undecided: 결론이 나지 않았거나 다음으로 미룬 안건입니다. 없으면 빈 배열입니다.
 - tasks: 회의 중에 누군가 하겠다고 했거나 누구에게 맡긴 일만 넣습니다. owner는 화자 표기, 맡은 사람이 분명하지 않으면 빈 문자열입니다. due는 말한 기한이고, 없으면 빈 문자열입니다. ${date ? '"다음 주 화요일"처럼 상대적인 기한은 회의 일시를 기준으로 MM/DD로 바꾸고 괄호 안에 원래 표현을 남깁니다.' : ''}
@@ -547,8 +569,10 @@ function showResult() {
 }
 function renderMinutes(m) {
   $('#pLevel').textContent = job.meta.level;
+  $('#pStyle').textContent = styleOf();
   $('#pTemplate').textContent = job.meta.template ? job.meta.template.name : '기본 양식';
   $('#redoLevel').value = job.meta.level;
+  $('#redoStyle').value = styleOf();
   renderRedoTemplates();
   renderDownloadBtn();
   if (m.title) $('#docTitle').value = sub(m.title);
@@ -626,8 +650,9 @@ function renderRedoTemplates() {
 $('#redo').addEventListener('click', async () => {
   if (dirty && !redoArmed) { redoArmed = true; $('#redo').textContent = '고친 내용이 사라집니다. 한 번 더 누르면 진행'; return; }
   const level = $('#redoLevel').value;
-  const prevTemplate = job.meta.template;
+  const prevTemplate = job.meta.template, prevStyle = job.meta.style;
   job.meta.template = loadTemplates().find(t => t.id === $('#redoTemplate').value) || null;
+  job.meta.style = $('#redoStyle').value;
   const btn = $('#redo'), started = Date.now();
   let chars = 0, waitMsg = '';
   const show = () => {
@@ -644,9 +669,10 @@ $('#redo').addEventListener('click', async () => {
     job.minutes = m; job.meta.level = level;
     renderMinutes(m);
     selectTab(currentTab());   // 양식이 바뀌면 보여줄 화면(기본 양식 / 내 양식)도 바뀐다
-    toast(`${job.meta.template ? job.meta.template.name : '기본 양식'} · ${level} 수준으로 다시 정리했습니다 (${Math.round((Date.now() - started) / 1000)}초)`);
+    toast(`${job.meta.template ? job.meta.template.name : '기본 양식'} · ${level} · ${styleOf()} 스타일로 다시 정리했습니다 (${Math.round((Date.now() - started) / 1000)}초)`);
   } catch (e) {
-    job.meta.template = prevTemplate;
+    job.meta.template = prevTemplate; job.meta.style = prevStyle;
+    $('#redoStyle').value = styleOf();
     renderRedoTemplates();
     toast(e instanceof ApiError && e.dailyQuota ? '오늘 무료 사용량을 다 썼습니다. 오후 4~5시 이후에 다시 해주세요' : `다시 정리하지 못했습니다: ${e.message}`);
     resetRedo();
@@ -770,17 +796,17 @@ function renderTplSelect() {
   $('#tplHint').textContent = !t
     ? '내 회의록 양식을 쓰려면 [새 양식]을 눌러 등록하세요. 한글(hwp·hwpx)·워드 파일이나 이미 작성한 회의록을 올리면 됩니다.'
     : t.file
-      ? `이 양식의 항목대로 정리하고, 결과 화면에서 ${FILE_LABEL[t.file.kind]}로 받으면 올린 파일의 서식 그대로 채워집니다.`
-      : '이 양식의 항목대로 정리합니다. 파일로 받으려면 양식을 hwpx나 docx 파일로 올리세요.';
+      ? `이 양식의 항목대로 정리하고, 결과 화면의 [파일로 받기 → 양식 그대로]로 받으면 올린 ${FILE_LABEL[t.file.kind]} 서식 그대로 채워집니다.`
+      : '이 양식의 항목대로 정리합니다. 결과는 기본 서식의 워드·한글·마크다운 파일로 받을 수 있습니다. 회사 서식 그대로 받으려면 양식을 hwpx나 docx 파일로 올리세요.';
 }
 $('#tplSelect').addEventListener('change', () => { selectTemplateId($('#tplSelect').value); renderTplSelect(); });
 // 양식 파일 형식별 내려받기 이름 (올린 형식 그대로 돌려준다)
-const FILE_LABEL = { hwpx: '[한글 파일(.hwpx)]', docx: '[워드 파일(.docx)]' };
+const FILE_LABEL = { hwpx: '한글 파일(.hwpx)', docx: '워드 파일(.docx)' };
 function renderFileNote() {
   $('#tplFileNote').hidden = !pendingFile;
   $('#tplFileName').textContent = pendingFile ? pendingFile.name : '';
   $('#tplFileHint').textContent = pendingFile
-    ? `결과 화면에서 ${FILE_LABEL[pendingFile.kind]}로 받으면 이 파일의 서식(표·글꼴·로고) 그대로, 칸 안의 글자만 바꿔 채웁니다.`
+    ? `결과 화면의 [파일로 받기 → 양식 그대로]로 받으면 이 ${FILE_LABEL[pendingFile.kind]}의 서식(표·글꼴·로고) 그대로, 칸 안의 글자만 바꿔 채웁니다.`
     : '';
 }
 function openEditor(t) {
@@ -856,12 +882,18 @@ $('#tplFile').addEventListener('change', async e => {
   }
 });
 
-/* ---------- 양식 파일(.hwpx·.docx)로 받기 ---------- */
-// 올린 양식 파일과 같은 형식으로, 원본 파일에 글자만 채워 돌려준다. 파일 양식이 없으면 버튼을 숨긴다.
+/* ---------- 파일로 받기 ---------- */
+// 양식 파일(hwpx·docx)을 올렸으면 "양식 그대로"(원본에 글자만 채움)가 기본이고,
+// 어떤 양식이든 기본 서식의 워드·한글 파일과 마크다운 파일로도 받을 수 있다.
 function renderDownloadBtn() {
   const kind = job?.meta.template?.file?.kind;
-  $('#hwpxBtn').hidden = !kind;
-  if (kind) $('#hwpxBtn').textContent = FILE_LABEL[kind].replace(/[\[\]]/g, '');
+  const opts = [
+    ...(kind ? [['template', `양식 그대로 (.${kind})`]] : []),
+    ['docx', '워드 (.docx)'], ['hwpx', '한글 (.hwpx)'], ['md', '마크다운 (.md)'],
+  ];
+  const prev = $('#dlFormat').value;
+  $('#dlFormat').innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+  $('#dlFormat').value = kind ? 'template' : (opts.some(o => o[0] === prev) ? prev : 'docx');
 }
 const FILL_SCHEMA = {
   type: 'OBJECT',
@@ -899,7 +931,7 @@ ${inventory}
 [새 회의록]
 ${minutesMarkdown}`;
 }
-const MIME = { hwpx: 'application/hwp+zip', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+const MIME = { hwpx: 'application/hwp+zip', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', md: 'text/markdown;charset=utf-8' };
 function downloadBytes(bytes, name, kind) {
   const url = URL.createObjectURL(new Blob([bytes], { type: MIME[kind] || 'application/octet-stream' }));
   const a = document.createElement('a');
@@ -907,16 +939,24 @@ function downloadBytes(bytes, name, kind) {
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
-$('#hwpxBtn').addEventListener('click', async () => {
-  const btn = $('#hwpxBtn');
+$('#dlBtn').addEventListener('click', async () => {
+  const btn = $('#dlBtn');
+  const format = $('#dlFormat').value;
   const file = job?.meta.template?.file;
-  if (btn.disabled || !file) return;
+  if (btn.disabled || !job) return;
   const label = btn.textContent;
   btn.disabled = true; btn.textContent = '파일 만드는 중…';
   try {
     const md = minutesAsMd(false);
     const title = ($('#docTitle').value.trim() || '회의록').replace(/[\\/:*?"<>|]/g, ' ').slice(0, 80);
-    // 칸 목록을 Gemini에게 보여주고 어느 칸에 무엇을 어떤 문단 모양으로 넣을지 받아, 원본 파일에 채운다
+    if (format !== 'template' || !file) {
+      // 기본 서식: 화면의 회의록을 그대로 옮긴다 (Gemini 요청 없음)
+      const bytes = format === 'md' ? new TextEncoder().encode(md) : format === 'hwpx' ? await basicHwpx(md, title) : await basicDocx(md, title);
+      downloadBytes(bytes, `${title}.${format}`, format);
+      toast(`${title}.${format} 파일을 내려받았습니다`);
+      return;
+    }
+    // 양식 그대로: 칸 목록을 Gemini에게 보여주고 어느 칸에 무엇을 어떤 문단 모양으로 넣을지 받아, 원본 파일에 채운다
     const src = b64ToBytes(file.data);
     const inv = await docInventory(src, file.kind);
     const m = await ensureModels();
