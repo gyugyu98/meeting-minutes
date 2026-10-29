@@ -125,6 +125,7 @@ fieldset.level legend{font-size:13px;font-weight:600;padding:0;margin-bottom:6px
 .tpl-editor h3{font-size:16px}
 .tpl-body{font-family:var(--mono);font-size:13px;line-height:1.55;resize:vertical;min-height:220px}
 .mini-btn{padding:4px 10px;font-size:13px}
+.file-note{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--accent-soft);border-radius:8px;padding:10px 14px;font-size:14px}
 .btn.danger{color:var(--rec)}
 .custom-doc{margin:0;padding:28px clamp(16px,4vw,40px)}
 .custom-doc h1{font-size:26px;margin:0 0 12px}

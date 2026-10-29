@@ -88,7 +88,6 @@
           <select class="input" id="tplSelect" style="flex:1 1 200px"></select>
           <button class="btn" id="tplNew" type="button">새 양식</button>
           <button class="btn" id="tplEdit" type="button">편집</button>
-          <button class="btn" id="tplShare" type="button">공유 링크 복사</button>
         </div>
         <span class="hint" id="tplHint"></span>
       </div>
@@ -104,7 +103,11 @@
           <input type="file" id="tplFile" accept=".md,.txt,.docx,.hwp,.hwpx" hidden>
         </div>
         <textarea class="input tpl-body" id="tplBody" rows="14" placeholder="# 회의 제목&#10;- 일시 / 장소 / 참석자&#10;## 1. 회의 배경&#10;## 2. 안건별 논의 (안건마다 발언자와 핵심 의견)&#10;## 3. 결정 사항&#10;## 4. Action Item&#10;| 할 일 | 담당 | 기한 |&#10;| --- | --- | --- |&#10;## 5. 다음 회의 일정"></textarea>
-        <span class="hint">평소 쓰는 회의록 틀을 붙여넣거나 파일(md·txt·docx·hwp·hwpx)에서 불러오세요. 제목은 #, 목록은 -, 표는 | 로 씁니다. 괄호 안 설명은 그 칸에 무엇을 쓸지 알려주는 지침으로 쓰입니다.</span>
+        <span class="hint">평소 쓰는 회의록 틀을 붙여넣거나 파일(md·txt·docx·hwp·hwpx)에서 불러오세요. 이미 작성한 회의록을 올려도 됩니다(내용은 형식 참고로만 씁니다). 제목은 #, 목록은 -, 표는 | 로 씁니다. 괄호 안 설명은 그 칸에 무엇을 쓸지 알려주는 지침으로 쓰입니다.</span>
+      </div>
+      <div class="file-note" id="tplFileNote" hidden>
+        <span>한글 서식 포함 · <b id="tplFileName"></b><br><span class="hint">결과 화면에서 [한글 파일]로 받으면 이 파일의 서식(표·글꼴·로고) 그대로 채워집니다.</span></span>
+        <button class="btn ghost mini-btn" id="tplFileRemove" type="button">서식 빼기</button>
       </div>
       <div class="row" style="justify-content:space-between">
         <button class="btn ghost" id="tplDelete" type="button">이 양식 삭제</button>
@@ -198,6 +201,7 @@
 
     <div class="actions">
       <button class="btn ghost" id="newBtn" type="button">새 녹음</button>
+      <button class="btn" id="hwpxBtn" type="button">한글 파일(.hwpx)</button>
       <button class="btn" id="copyMd" type="button">마크다운 복사</button>
       <button class="btn primary" id="copyNotion" type="button">노션용 복사</button>
     </div>

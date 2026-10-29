@@ -407,6 +407,7 @@ function summarize(level, first, useModel, onProgress) {
     const tplPrompt = `아래 [회의록 양식]에 맞춰 회의 대화록으로 회의록을 작성하세요. 회의록은 markdown 필드에 마크다운으로 씁니다.${mapRule}
 - 양식의 제목·소제목·항목 이름과 순서를 그대로 지킵니다. 양식에 없는 큰 제목을 새로 만들지 않습니다. 양식에 맞는 자리가 없는 중요한 내용은 가장 가까운 항목에 넣습니다.
 - 양식 안의 괄호 설명, 예시 문구, 빈칸 표시(○○, ___, "내용" 같은 자리 표시)는 그 칸에 무엇을 쓸지 알려주는 지침입니다. 실제 내용으로 바꿔 쓰고 지침 문구는 남기지 않습니다.
+- 양식이 이전 회의를 기록한 회의록이면, 그 내용(날짜·참석자·논의 내용)은 형식 참고용일 뿐이니 가져오지 말고 이번 회의 대화록으로 새로 씁니다. 발표자별로 묶는 형식이면 이번 회의의 화자별로 묶습니다.
 - 양식이 표인 곳은 마크다운 표로, 목록인 곳은 목록으로, 체크박스인 곳은 "- [ ]"로 씁니다. 표의 행 수는 내용에 맞게 늘리거나 줄입니다.
 - 대화록에서 확인할 수 없는 항목(장소 등)은 지어내지 말고 "-"로 둡니다.
 - 사람을 가리킬 때는 화자 표기(화자1, 화자2 …)를 그대로 씁니다.
@@ -706,42 +707,54 @@ function toast(m) { const t = $('#toast'); t.textContent = m; t.hidden = false; 
 window.addEventListener('beforeunload', e => { if (busy || (job && job.segments.length)) { e.preventDefault(); e.returnValue = ''; } });
 
 /* ---------- 회의록 양식 ---------- */
-const PUBLIC_URL = 'https://gyugyu98.github.io/meeting-minutes/';
 let editingId = null, deleteArmed = false;
+let pendingFile = null;   // 편집 중인 양식의 한글 서식 파일 { name, hwpx(base64) }
+const currentTemplate = () => loadTemplates().find(t => t.id === $('#tplSelect').value) || null;
 function renderTplSelect() {
   const list = loadTemplates(), sel = selectedTemplateId();
   $('#tplSelect').innerHTML = `<option value="default">기본 양식 (주제·논의·결론·Task)</option>` +
-    list.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+    list.map(t => `<option value="${esc(t.id)}">${esc(t.name)}${t.file ? ' · 한글 서식' : ''}</option>`).join('');
   $('#tplSelect').value = list.some(t => t.id === sel) ? sel : 'default';
-  const custom = $('#tplSelect').value !== 'default';
-  $('#tplEdit').disabled = $('#tplShare').disabled = !custom;
-  $('#tplHint').textContent = custom
-    ? '이 양식의 제목·항목·표 모양 그대로 채웁니다. 정리 수준은 논의 내용의 분량에 적용됩니다.'
-    : '내 회의록 양식을 쓰려면 [새 양식]을 눌러 등록하세요. 한글(hwp)·워드 파일에서 불러올 수 있습니다.';
+  const t = currentTemplate();
+  $('#tplEdit').disabled = !t;
+  $('#tplHint').textContent = !t
+    ? '내 회의록 양식을 쓰려면 [새 양식]을 눌러 등록하세요. 한글(hwp·hwpx)·워드 파일이나 이미 작성한 회의록을 올리면 됩니다.'
+    : t.file
+      ? '이 양식의 항목대로 정리하고, 결과 화면의 [한글 파일]로 받으면 올린 한글 파일의 서식 그대로 채워집니다.'
+      : '이 양식의 제목·항목·표 모양 그대로 채웁니다. 정리 수준은 논의 내용의 분량에 적용됩니다.';
 }
 $('#tplSelect').addEventListener('change', () => { selectTemplateId($('#tplSelect').value); renderTplSelect(); });
+function renderFileNote() {
+  $('#tplFileNote').hidden = !pendingFile;
+  $('#tplFileName').textContent = pendingFile ? pendingFile.name : '';
+}
 function openEditor(t) {
   editingId = t ? t.id : null;
+  pendingFile = t?.file || null;
   deleteArmed = false;
   $('#tplEditorTitle').textContent = t ? '양식 편집' : '새 양식';
   $('#tplName').value = t ? t.name : '';
   $('#tplBody').value = t ? t.body : '';
   $('#tplDelete').hidden = !t;
   $('#tplDelete').textContent = '이 양식 삭제';
+  renderFileNote();
   $('#tplEditor').hidden = false;
   $('#tplName').focus();
 }
 $('#tplNew').addEventListener('click', () => openEditor(null));
-$('#tplEdit').addEventListener('click', () => openEditor(loadTemplates().find(t => t.id === $('#tplSelect').value)));
+$('#tplEdit').addEventListener('click', () => openEditor(currentTemplate()));
 $('#tplCancel').addEventListener('click', () => { $('#tplEditor').hidden = true; });
+$('#tplFileRemove').addEventListener('click', () => { pendingFile = null; renderFileNote(); });
 $('#tplSave').addEventListener('click', () => {
   const name = $('#tplName').value.trim(), body = $('#tplBody').value.trim();
   if (!name) return toast('양식 이름을 넣어주세요');
   if (!body) return toast('양식 내용을 넣어주세요');
-  const saved = upsertTemplate({ id: editingId || undefined, name, body });
-  selectTemplateId(saved.id); renderTplSelect();
-  $('#tplEditor').hidden = true;
-  toast(`'${name}' 양식을 저장했습니다`);
+  try {
+    const saved = upsertTemplate({ id: editingId || undefined, name, body, file: pendingFile });
+    selectTemplateId(saved.id); renderTplSelect();
+    $('#tplEditor').hidden = true;
+    toast(`'${name}' 양식을 저장했습니다`);
+  } catch (e) { toast(e.message); }
 });
 $('#tplDelete').addEventListener('click', () => {
   if (!deleteArmed) { deleteArmed = true; $('#tplDelete').textContent = '한 번 더 누르면 삭제됩니다'; return; }
@@ -755,37 +768,103 @@ $('#tplFile').addEventListener('change', async e => {
   if (!f) return;
   toast(`${f.name} 읽는 중…`);
   try {
-    const md = await templateFromFile(f);
-    if (!md) return toast('파일에서 글자를 찾지 못했습니다');
-    $('#tplBody').value = md;
+    const res = await templateFromFile(f);
+    if (!res.body) return toast('파일에서 글자를 찾지 못했습니다');
+    $('#tplBody').value = res.body;
+    pendingFile = res.hwpx ? { name: f.name, hwpx: bytesToB64(res.hwpx) } : null;
+    renderFileNote();
     if (!$('#tplName').value.trim()) $('#tplName').value = f.name.replace(/\.[^.]+$/, '').slice(0, 60);
-    toast('불러왔습니다. 필요한 부분을 고친 뒤 저장하세요');
+    toast(res.hwpx ? '불러왔습니다. 한글 서식도 함께 보관합니다' : '불러왔습니다. 필요한 부분을 고친 뒤 저장하세요');
   } catch (err) {
     console.log('[회의록] 양식 파일 읽기 실패', err);
     toast(`파일을 읽지 못했습니다: ${err.message}. 내용을 복사해 붙여넣어 주세요`);
   }
 });
-$('#tplShare').addEventListener('click', async () => {
-  const t = loadTemplates().find(x => x.id === $('#tplSelect').value);
-  if (!t) return;
-  const base = location.protocol.startsWith('http') ? location.origin + location.pathname : PUBLIC_URL;
-  copy(base + '#tpl=' + await encodeTemplate(t), `'${t.name}' 양식 링크를 복사했습니다. 받은 사람이 열면 양식이 추가됩니다`);
-});
-// 양식 공유 링크로 열었으면 그 양식을 추가하고 고른다
-async function importTemplateFromLink() {
-  const m = location.hash.match(/^#tpl=([A-Za-z0-9_-]+)$/);
-  if (!m) return;
-  try {
-    const t = upsertTemplate(await decodeTemplate(m[1]));
-    selectTemplateId(t.id); renderTplSelect();
-    toast(`'${t.name}' 양식을 추가했습니다`);
-  } catch (e) { toast('양식 링크를 읽지 못했습니다'); }
-  history.replaceState(null, '', location.pathname + location.search);
+
+/* ---------- 한글 파일(.hwpx) 받기 ---------- */
+const FILL_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    cells: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
+      cell: { type: 'STRING' },
+      paragraphs: { type: 'ARRAY', items: { type: 'OBJECT', properties: { like: { type: 'STRING' }, parts: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['like', 'parts'] } },
+    }, required: ['cell', 'paragraphs'] } },
+  },
+  required: ['cells'],
+};
+function fillPrompt(inventory, minutesMarkdown) {
+  const people = $('#pPeople').textContent.trim() || job.meta.people.join(', ');
+  return `아래 [양식 칸 목록]은 한글 회의록 양식 파일의 표 칸(C번호)과 칸 안의 문단(P번호)입니다. 이 양식은 이전 회의를 기록한 회의록일 수 있어서, 칸 안의 글은 예시입니다.
+[새 회의록]의 내용으로 이 양식을 채우는 계획을 cells에 적으세요.
+
+규칙:
+- 바꿔야 하는 칸만 cells에 넣습니다. 항목 이름 칸(일 시, 장 소, 참석자, 주 제, 내 용, 작성일자 같은 머리글), 문서 제목, 그림, "끝." 같은 고정 문구 칸은 넣지 않습니다.
+- 회의마다 달라지는 칸(일시, 작성일자, 장소, 참석자, 주제, 내용 등)은 새 회의록 값으로 채웁니다. 새 회의록에서 알 수 없는 값은 "-"로 씁니다. 작성자·부서처럼 회의와 상관없는 사람·조직 정보 칸은 넣지 않아 원래 값을 그대로 둡니다.
+- 날짜는 그 칸의 예시와 같은 표기로 씁니다(예: 2025.07.23 꼴이면 2026.10.29, 2025년 07월 23일 꼴이면 2026년 10월 29일).
+- 칸에 넣을 문단마다 like에 역할이 같은 예시 문단 번호를 고릅니다. 같은 칸 안의 문단을 우선 고릅니다. 예: 큰 제목은 "1. ..." 같은 제목 문단, 발표자 이름은 발표자 문단, 굵은 안건과 세부 내용이 한 문단에 있는 형식은 그 문단, 세부 내용만 있는 줄은 그런 문단, 빈 줄은 빈 문단.
+- parts는 like 문단의 조각 수에 맞춰 나눠 씁니다. 조각이 1개인 문단은 parts가 1개입니다. 예시 조각의 앞 공백과 기호(예: "  - ", "     : ")는 같은 모양으로 맞춥니다. ⏎는 그 자리에서 줄을 바꾼다는 뜻입니다.
+- 새 회의록의 내용은 빠짐없이 옮기고 줄이지 않습니다. 예시 회의록의 내용은 가져오지 않습니다.
+- 새 회의록의 구성이 양식과 다르면 양식의 구성에 맞춰 옮겨 담습니다. 양식에 자리가 없는 결론·결정 사항은 가장 가까운 항목에 넣습니다.
+
+회의 일시: ${formatDate(job.meta.date, job.duration) || '-'} / 참석자: ${people || '-'}
+
+[양식 칸 목록]
+${inventory}
+
+[새 회의록]
+${minutesMarkdown}`;
 }
+function downloadBytes(bytes, name) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/hwp+zip' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+$('#hwpxBtn').addEventListener('click', async () => {
+  const btn = $('#hwpxBtn');
+  if (btn.disabled) return;
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = '한글 파일 만드는 중…';
+  try {
+    const md = customMode() ? htmlToMd($('#customDoc')) : minutesMd(false);
+    const title = ($('#docTitle').value.trim() || '회의록').replace(/[\\/:*?"<>|]/g, ' ').slice(0, 80);
+    const tpl = job.meta.template;
+    let bytes;
+    if (tpl?.file) {
+      // 올린 한글 양식에 채운다: 칸 목록을 Gemini에게 보여주고 어느 칸에 무엇을 어떤 문단 모양으로 넣을지 받는다
+      const src = b64ToBytes(tpl.file.hwpx);
+      const inv = await hwpxInventory(src);
+      const m = await ensureModels();
+      const ask = mdl => withRetry(() => generateJSON(key(), mdl, [{ text: fillPrompt(inv.text, md) }], FILL_SCHEMA, {
+        thinking: 'low',
+        onText: text => { btn.textContent = `한글 파일 만드는 중 · ${text.length.toLocaleString()}자`; },
+        onStats: st => console.log('[회의록 측정] 한글 양식 채우기', mdl, st),
+      }), (s, why) => { btn.textContent = s ? `${why} (${s}초)` : '한글 파일 만드는 중…'; });
+      let plan;
+      try { plan = await ask(m.lite || m.summary); }
+      catch (e) {
+        if (!(e instanceof ApiError) || !(e.dailyQuota || e.modelUnavailable) || !m.summary) throw e;
+        plan = await ask(m.summary);
+      }
+      bytes = await fillHwpx(src, plan);
+    } else {
+      // 한글 서식 파일이 없으면 화면 내용을 기본 서식의 한글 파일로 만든다
+      await loadHwpConvert();
+      bytes = await window.HwpConvert.markdownToHwpx(md, { title });
+    }
+    downloadBytes(bytes, `${title}.hwpx`);
+    toast('한글 파일을 내려받았습니다. 한글에서 열어 확인하세요');
+  } catch (e) {
+    console.log('[회의록] 한글 파일 만들기 실패', e);
+    toast(e instanceof ApiError && e.dailyQuota ? '오늘 무료 사용량을 다 썼습니다. 오후 4~5시 이후에 다시 해주세요' : `한글 파일을 만들지 못했습니다: ${e.message}`);
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+});
 
 /* ---------- 시작 ---------- */
 resetUpload();
 renderKey();
 renderTplSelect();
-importTemplateFromLink();
 go(key() ? 'upload' : 'key');
