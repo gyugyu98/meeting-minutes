@@ -148,10 +148,15 @@ async function hwpxInventory(bytes) {
       const addr = tc.getElementsByTagNameNS('*', 'cellAddr')[0];
       const span = tc.getElementsByTagNameNS('*', 'cellSpan')[0];
       const sub = kids(tc, 'subList')[0] || tc;
-      const cell = { id: 'C' + (cells.length + 1), el: tc, sub, paras: [] };
+      const row = +addr?.getAttribute('rowAddr') || 0, col = +addr?.getAttribute('colAddr') || 0;
+      const cell = { id: 'C' + (cells.length + 1), el: tc, sub, paras: [], tbl: tbl.__no, row, col, colSpan: +span?.getAttribute('colSpan') || 1 };
       cells.push(cell);
       const ps = kids(sub, 'p');
-      lines.push(`${cell.id} (표${tbl.__no} ${+addr?.getAttribute('rowAddr') + 1}행 ${+addr?.getAttribute('colAddr') + 1}열${span && (span.getAttribute('colSpan') !== '1' || span.getAttribute('rowSpan') !== '1') ? `, ${span.getAttribute('rowSpan')}×${span.getAttribute('colSpan')} 병합` : ''})`);
+      // 왼쪽 칸이 작성자·부서 같은 머리글이면 이 칸은 회의와 상관없는 고정 정보라 바꾸지 않는다
+      const left = cells.find(c => c.tbl === cell.tbl && c.row === row && c.col + c.colSpan === col);
+      const label = left ? left.paras.map(p => paraText(p.el)).join('').replace(/\s+/g, '') : '';
+      cell.fixed = /^(작성자|부서|소속|직위|직급|결재|서명|확인|비고|담당자)$/.test(label);
+      lines.push(`${cell.id} (표${tbl.__no} ${row + 1}행 ${col + 1}열${span && (span.getAttribute('colSpan') !== '1' || span.getAttribute('rowSpan') !== '1') ? `, ${span.getAttribute('rowSpan')}×${span.getAttribute('colSpan')} 병합` : ''})${cell.fixed ? ' [바꾸지 않음]' : ''}`);
       for (const p of ps) {
         const runs = kids(p, 'run');
         const textRuns = runs.filter(r => !r.querySelector('*') || [...r.children].every(k => k.localName === 't'));
@@ -171,15 +176,17 @@ async function fillHwpx(bytes, plan) {
   const inv = await hwpxInventory(bytes);
   const cellById = Object.fromEntries(inv.cells.map(c => [c.id, c]));
   const paraById = Object.fromEntries(inv.paras.map(p => [p.id, p]));
-  let nextId = Math.max(0, ...inv.paras.map(p => parseInt(p.el.getAttribute('id')) || 0)) + 1;
+  // 새 문단 번호는 문서 전체(표 밖 문단 포함)에서 겹치지 않게 매긴다
+  const allIds = inv.pack.sections.flatMap(s => [...s.doc.getElementsByTagNameNS('*', 'p')].map(p => parseInt(p.getAttribute('id')) || 0));
+  let nextId = Math.max(0, ...allIds) + 1;
   for (const change of plan.cells || []) {
     const cell = cellById[change.cell];
-    if (!cell || !Array.isArray(change.paragraphs) || !change.paragraphs.length) continue;
+    if (!cell || cell.fixed || !Array.isArray(change.paragraphs) || !change.paragraphs.length) continue;
     // 문단 모양 견본: 지정한 문단이 쓸 수 없으면 그 칸의 첫 글자 문단을 쓴다
     const fallback = cell.paras.find(p => p.usable) || inv.paras.find(p => p.usable);
-    const made = change.paragraphs.map(np => {
+    const made = normalizeParagraphs(change.paragraphs, paraById).map(np => {
       const like = (paraById[np.like]?.usable ? paraById[np.like] : fallback);
-      return like ? cloneWithText(like.el, Array.isArray(np.parts) ? np.parts : [String(np.parts ?? '')], nextId++) : null;
+      return like ? cloneWithText(like.el, np.parts, nextId++) : null;
     }).filter(Boolean);
     if (!made.length) continue;
     cell.paras.forEach(p => p.el.remove());
@@ -199,6 +206,27 @@ async function fillHwpx(bytes, plan) {
   out.file('mimetype', await zip.file('mimetype').async('uint8array'), { compression: 'STORE', createFolders: false });
   for (const n of order) if (n !== 'mimetype') out.file(n, await zip.file(n).async('uint8array'), { createFolders: false });
   return await out.generateAsync({ type: 'uint8array', compression: 'DEFLATE', mimeType: 'application/hwp+zip' });
+}
+
+// Gemini가 준 문단을 한글에 맞게 다듬는다:
+// 마크다운 기호(**, [ ])를 빼고, 한 문단에 여러 목록 항목("  - …  - …")을 이어 쓴 경우 항목마다 문단을 나눈다.
+function normalizeParagraphs(list, paraById) {
+  const clean = s => String(s ?? '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/(^|\s)-\s\[[ xX]\]\s*/g, '$1- ').replace(/^\s*\[[ xX]\]\s*/, '');
+  const out = [];
+  for (const np of list) {
+    const parts = (Array.isArray(np.parts) ? np.parts : [np.parts]).map(clean);
+    const likeRuns = paraById[np.like] ? kids(paraById[np.like].el, 'run').length : 1;
+    if (parts.length === 1 && likeRuns <= 1) {
+      const items = parts[0].split(/(?<=\S)\s{2,}(?=-\s)/);   // "  - 가  - 나" → "  - 가", "- 나"
+      if (items.length > 1) {
+        const lead = items[0].match(/^\s*/)[0];
+        items.forEach((t, k) => out.push({ like: np.like, parts: [k ? lead + t.trim() : t] }));
+        continue;
+      }
+    }
+    out.push({ like: np.like, parts });
+  }
+  return out;
 }
 
 // 견본 문단을 복제해 글자만 바꾼다. 글자 조각(parts)은 견본의 글자 모양 조각(run)에 차례로 넣는다.

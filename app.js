@@ -286,12 +286,16 @@ async function transcribeRange(i, m) {
 function withTimes(raw, r) {
   const span = (r.e || job.duration || 0) - r.s;
   const total = raw.reduce((a, x) => a + x.text.length, 0) || 1;
+  // 받아쓰기 모델은 화자를 spk_0부터 매길 때가 있어 화자1부터로 맞춘다
+  const nums = raw.map(x => (String(x.speaker).match(/\d+/) || [])[0]).filter(Boolean).map(Number);
+  const shift = nums.length && Math.min(...nums) === 0 ? 1 : 0;
+  const who = s => { const m = String(s).match(/\d+/); return m ? '화자' + (Number(m[0]) + shift) : normSpeaker(s); };
   let acc = 0;
   return raw.map(x => {
     const approx = x.sec == null;
     const t = r.s + (approx ? span * acc / total : x.sec);
     acc += x.text.length;
-    return { t, approx: approx && span > 0, noTime: approx && !(span > 0), who: normSpeaker(x.speaker), text: x.text };
+    return { t, approx: approx && span > 0, noTime: approx && !(span > 0), who: who(x.speaker), text: x.text };
   });
 }
 
@@ -342,6 +346,9 @@ const MINUTES_SCHEMA = {
 };
 
 // 정리 수준별 지시. 가벼운 모델은 분량을 정해주지 않으면 짧게 줄이므로, 회의 길이(분)에 비례한 최소 항목 수를 준다.
+// 회의록 문장 끝맺음: 업무 회의록에서 쓰는 개조식
+const STYLE_RULE = `- 문장은 개조식으로 끝맺습니다. "~함", "~음", "~임" 또는 명사로 끝내고 "~습니다", "~했다", "~이다"는 쓰지 않습니다. 예: "9월까지 시스템 설계 상세화 확정 예정임", "데이터 양은 설계 인자 위주라 많지 않음", "수리계산 템플릿 정밀화 필요", "벡터 DB 파일럿 진행".`;
+
 const LEVELS = {
   '간단': mins => `안건마다 주요 의견과 그 근거를 points 2~4개로 씁니다. 각 항목은 1~2문장이고, 누구의 의견인지 화자 표기를 넣습니다. 전체 points는 ${Math.max(4, Math.round(mins * 0.3))}개 안팎입니다.`,
   '보통': mins => `안건마다 논의 흐름을 순서대로 씁니다. 누가 어떤 의견을 냈고, 어떤 반론과 근거가 오갔고, 어떻게 결론에 이르렀는지 담습니다. 각 항목은 1~3문장이고, 언급된 숫자·일정·이름·대안은 그대로 남깁니다. 전체 points는 최소 ${Math.max(8, Math.round(mins * 0.7))}개입니다.`,
@@ -411,6 +418,7 @@ function summarize(level, first, useModel, onProgress) {
 - 양식이 표인 곳은 마크다운 표로, 목록인 곳은 목록으로, 체크박스인 곳은 "- [ ]"로 씁니다. 표의 행 수는 내용에 맞게 늘리거나 줄입니다.
 - 대화록에서 확인할 수 없는 항목(장소 등)은 지어내지 말고 "-"로 둡니다.
 - 사람을 가리킬 때는 화자 표기(화자1, 화자2 …)를 그대로 씁니다.
+${STYLE_RULE}
 - 논의 내용 분량: ${LEVELS[level](meetingMinutes(transcript)).replace(/points/g, '논의 항목')}
 - 할 일은 회의 중에 누군가 하겠다고 했거나 누구에게 맡긴 일만 씁니다. ${date ? '"다음 주 화요일"처럼 상대적인 기한은 회의 일시를 기준으로 MM/DD로 바꾸고 괄호 안에 원래 표현을 남깁니다.' : ''}
 - title: ${job.meta.title ? `"${job.meta.title}" 를 그대로 씁니다.` : '회의 내용을 나타내는 짧은 제목입니다.'} 양식에 회의 제목 자리가 있으면 그 자리에도 씁니다.
@@ -429,6 +437,7 @@ ${transcript}`;
 
   const prompt = `아래 회의 대화록으로 회의록을 작성하세요.${mapRule}
 - 사람을 가리킬 때는 화자 표기(화자1, 화자2 …)를 그대로 씁니다.
+${STYLE_RULE}
 - title: ${job.meta.title ? `"${job.meta.title}" 를 그대로 씁니다.` : '회의 내용을 나타내는 짧은 제목입니다.'}
 - topic: 회의의 목적과 주제를 ${level === '간단' ? '1~2' : '2~3'}문장으로 씁니다.
 - agendas: 다룬 안건별로 나눕니다. ${LEVELS[level](meetingMinutes(transcript))}
@@ -800,7 +809,11 @@ function fillPrompt(inventory, minutesMarkdown) {
 규칙:
 - 바꿔야 하는 칸만 cells에 넣습니다. 항목 이름 칸(일 시, 장 소, 참석자, 주 제, 내 용, 작성일자 같은 머리글), 문서 제목, 그림, "끝." 같은 고정 문구 칸은 넣지 않습니다.
 - 회의마다 달라지는 칸(일시, 작성일자, 장소, 참석자, 주제, 내용 등)은 새 회의록 값으로 채웁니다. 새 회의록에서 알 수 없는 값은 "-"로 씁니다. 작성자·부서처럼 회의와 상관없는 사람·조직 정보 칸은 넣지 않아 원래 값을 그대로 둡니다.
-- 날짜는 그 칸의 예시와 같은 표기로 씁니다(예: 2025.07.23 꼴이면 2026.10.29, 2025년 07월 23일 꼴이면 2026년 10월 29일).
+- [바꾸지 않음] 표시가 있는 칸은 cells에 넣지 않습니다.
+- 날짜는 그 칸의 예시와 같은 표기로 씁니다(예: 2025.07.23 꼴이면 2026.10.29, 2025년 07월 23일 꼴이면 2026년 10월 29일). 예시가 없으면 "2026년 10월 29일" 꼴로 씁니다.
+- 새 회의록의 문장 끝맺음("~함", "~음", 명사로 끝남)은 그대로 둡니다.
+- 목록 항목 하나는 문단 하나입니다. 여러 항목을 한 문단에 이어 쓰지 말고, 항목마다 같은 모양의 문단을 반복해서 씁니다.
+- 마크다운 기호(**, #, [ ], 표의 |)는 쓰지 않습니다.
 - 칸에 넣을 문단마다 like에 역할이 같은 예시 문단 번호를 고릅니다. 같은 칸 안의 문단을 우선 고릅니다. 예: 큰 제목은 "1. ..." 같은 제목 문단, 발표자 이름은 발표자 문단, 굵은 안건과 세부 내용이 한 문단에 있는 형식은 그 문단, 세부 내용만 있는 줄은 그런 문단, 빈 줄은 빈 문단.
 - parts는 like 문단의 조각 수에 맞춰 나눠 씁니다. 조각이 1개인 문단은 parts가 1개입니다. 예시 조각의 앞 공백과 기호(예: "  - ", "     : ")는 같은 모양으로 맞춥니다. ⏎는 그 자리에서 줄을 바꾼다는 뜻입니다.
 - 새 회의록의 내용은 빠짐없이 옮기고 줄이지 않습니다. 예시 회의록의 내용은 가져오지 않습니다.
