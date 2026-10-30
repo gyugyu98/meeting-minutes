@@ -50,6 +50,22 @@ function go(name) {
 }
 
 /* ---------- 1. 키 ---------- */
+// 받아쓰기 전용 모델을 못 쓰는 키는 Flash-Lite로 받아써서 몇 분씩 걸린다. 멈춘 것으로 오해하지 않게 계속 알린다
+function renderSlowNotice() {
+  const m = models();
+  const slow = !!key() && !!m && (!m.transcribe || !!job?.noTranscribe);
+  const why = m && m.transcribe ? '받아쓰기 전용 모델을 지금 쓸 수 없어(권한·오늘 한도 등)' : '이 키로는 받아쓰기 전용 모델을 쓸 수 없어';
+  $$('.slow-notice').forEach(el => {
+    el.hidden = !slow;
+    el.textContent = slow ? `${why} Flash-Lite로 받아씁니다. 30분 녹음에 5~10분쯤 걸릴 수 있습니다(전용 모델은 수십 초). 회사 계정으로 받은 키라면 개인 Gmail 계정으로 새 키를 받으면 빨라질 수 있습니다.` : '';
+  });
+}
+// 저장해 둔 모델 목록은 키를 넣던 때 기준이라, 열 때마다 다시 확인해 새로 열린 모델을 반영한다
+async function refreshModels() {
+  if (!key()) return;
+  try { store('gemini_models', JSON.stringify(await pickModels(key()))); } catch (e) { console.log('[회의록] 모델 목록 갱신 실패', e.message); }
+  renderSlowNotice();
+}
 function renderKey() {
   const has = !!key();
   $('#keyChip').textContent = has ? 'API 키 저장됨 · 지우기' : 'API 키 없음';
@@ -65,7 +81,7 @@ $('#saveKey').addEventListener('click', async () => {
     const m = await pickModels(v);
     store('gemini_key', v); store('gemini_models', JSON.stringify(m));
     $('#apiKey').value = '';
-    renderKey(); go('upload');
+    renderKey(); go('upload'); renderSlowNotice();
     toast(m.transcribe ? '키를 확인했습니다' : '키를 확인했습니다. 받아쓰기 전용 모델이 없어 Flash-Lite로 받아씁니다');
   } catch (e) {
     toast(e instanceof ApiError && e.invalidKey ? '키가 올바르지 않습니다. AI Studio에서 다시 복사해 주세요' : `키를 확인하지 못했습니다: ${e.message}`);
@@ -75,7 +91,7 @@ $('#saveKey').addEventListener('click', async () => {
 });
 $('#keyChip').addEventListener('click', () => {
   if (busy) return toast('처리 중에는 키를 바꿀 수 없습니다');
-  if (key()) { store('gemini_key', null); store('gemini_models', null); store('gemini_model', null); renderKey(); toast('이 브라우저에서 키를 지웠습니다'); }
+  if (key()) { store('gemini_key', null); store('gemini_models', null); store('gemini_model', null); renderKey(); renderSlowNotice(); toast('이 브라우저에서 키를 지웠습니다'); }
   go('key');
 });
 
@@ -98,6 +114,7 @@ drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('
 
 function resetUpload() {
   picked = null; $('#file').value = '';
+  renderSlowNotice();
   $('#drop').classList.remove('has');
   $('#dropTitle').textContent = '녹음 파일을 끌어다 놓거나 눌러서 고르세요';
   $('#dropSub').textContent = '휴대폰 녹음(m4a), mp3, wav · 1시간 이상도 됩니다';
@@ -170,16 +187,19 @@ function wavPiece(audio, s, e, name) {
 
 function steps() {
   const multi = job.ranges.length > 1;
+  // 지금 쓰는(쓸) 모델. 받아쓰기 전용 모델을 못 쓰면 Flash-Lite, 정리는 Flash-Lite가 막히면 Flash로 바뀐다
+  const m = models() || {};
+  const tModel = job.noTranscribe || !m.transcribe ? m.lite : m.transcribe;
   const list = multi ? [{ id: 'cut', label: '녹음 자르기', sub: `${job.ranges.length}조각 · 30분 이하씩` }] : [];
-  job.ranges.forEach((r, i) => list.push({ id: 'r' + i, label: multi ? `받아쓰기 ${i + 1}/${job.ranges.length}` : '받아쓰기', sub: r.e ? `${clock(r.s)}–${clock(r.e)}` : (job.file.size / 1048576).toFixed(1) + ' MB' }));
-  list.push({ id: 'min', label: '회의록 정리', sub: '주제·논의·결론·Task' });
+  job.ranges.forEach((r, i) => list.push({ id: 'r' + i, label: multi ? `받아쓰기 ${i + 1}/${job.ranges.length}` : '받아쓰기', sub: r.e ? `${clock(r.s)}–${clock(r.e)}` : (job.file.size / 1048576).toFixed(1) + ' MB', model: r.model || tModel }));
+  list.push({ id: 'min', label: '회의록 정리', sub: '주제·논의·결론·Task', model: job.summaryModel || m.lite || m.summary });
   return list;
 }
 // running: 지금 진행 중인 단계 id 모음, failed: 멈췄을 때 그 단계들을 빨갛게
 function renderProg(running = new Set(), failed = false) {
   const list = steps();
   const doneIds = new Set([job.audio || job.ranges.every(r => r.done) ? 'cut' : null, ...job.ranges.map((r, i) => r.done ? 'r' + i : null), job.minutes ? 'min' : null].filter(Boolean));
-  $('#prog').innerHTML = list.map(s => `<li class="${running.has(s.id) ? (failed ? 'fail' : 'run') : doneIds.has(s.id) ? 'done' : ''}" data-id="${s.id}"><i></i><span>${esc(s.label)}</span><small>${esc(s.sub)}</small></li>`).join('');
+  $('#prog').innerHTML = list.map(s => `<li class="${running.has(s.id) ? (failed ? 'fail' : 'run') : doneIds.has(s.id) ? 'done' : ''}" data-id="${s.id}"><i></i><span>${esc(s.label)}<em class="model">${esc(s.model || '')}</em></span><small>${esc(s.sub)}</small></li>`).join('');
   $('#barFill').style.width = (list.filter(s => doneIds.has(s.id)).length / list.length * 100) + '%';
 }
 
@@ -201,6 +221,7 @@ function addStat(label, st) {
   $('#statsList').innerHTML = job.stats.map(l => `<li>${esc(l)}</li>`).join('');
 }
 function setSub(id, text) { const el = $(`#prog [data-id="${id}"] small`); if (el) el.textContent = text; }
+function setModel(id, name) { const el = $(`#prog [data-id="${id}"] .model`); if (el) el.textContent = name; }
 function note(text) { $('#workNote').hidden = !text; $('#workNote').textContent = text || ''; }
 const onWait = (s, why) => note(s > 0 ? `${why} (${s}초)` : '');
 
@@ -218,6 +239,7 @@ async function run() {
   const elapsed = setInterval(tick, 1000);
   try {
     const m = await ensureModels();
+    renderSlowNotice();
     renderProg(running);
 
     // 30분 넘는 녹음은 브라우저에서 풀어 조각으로 자른다
@@ -285,9 +307,11 @@ async function transcribeRange(i, m) {
         if (!(e instanceof ApiError) || !(e.modelUnavailable || e.dailyQuota)) throw e;
         console.log('[회의록] 받아쓰기 전용 모델을 쓸 수 없어 Flash-Lite로 받아씁니다', e.message);
         job.noTranscribe = true;
+        renderSlowNotice();
         note('받아쓰기 전용 모델을 쓸 수 없어 Flash-Lite로 받아씁니다 (조금 느릴 수 있습니다)');
       }
     }
+    if (!segs) { r.model = m.lite; setModel('r' + i, m.lite); }
     if (!segs) segs = await transcribeWithLlm(r, remote, m.lite, st => addStat(`${label} (${m.lite})`, st));
     r.segs = segs; r.done = true; r.partial = null;
     renderLive();
@@ -425,11 +449,13 @@ function applySpeakerMap(map) {
 async function summarizeWithFallback(level, first, onWaitFn = onWait, onProgress) {
   const m = await ensureModels();
   const [primary, backup] = [m.lite || m.summary, m.summary];
+  job.summaryModel = primary; setModel('min', primary);
   try {
     return await withRetry(() => summarize(level, first, primary, onProgress), onWaitFn);
   } catch (e) {
     if (!(e instanceof ApiError) || !(e.dailyQuota || e.modelUnavailable) || primary === backup) throw e;
     onWaitFn(1, `${primary}의 오늘 한도를 다 써서 ${backup}로 정리합니다`);
+    job.summaryModel = backup; setModel('min', backup);
     return await withRetry(() => summarize(level, first, backup, onProgress), onWaitFn);
   }
 }
@@ -686,7 +712,7 @@ $('#redo').addEventListener('click', async () => {
   let chars = 0, waitMsg = '';
   const show = () => {
     const sec = Math.floor((Date.now() - started) / 1000);
-    btn.textContent = waitMsg || `다시 정리하는 중 · ${sec}초${chars ? ` · ${chars.toLocaleString()}자 받음` : ' · 응답 기다리는 중'}`;
+    btn.textContent = waitMsg || `다시 정리하는 중 (${job.summaryModel || ''}) · ${sec}초${chars ? ` · ${chars.toLocaleString()}자 받음` : ' · 응답 기다리는 중'}`;
   };
   btn.disabled = true; show();
   const timer = setInterval(show, 1000);
@@ -716,6 +742,10 @@ function selectTab(t) {
   $('#minutes').hidden = t !== 'minutes' || customMode();
   $('#customDoc').hidden = t !== 'minutes' || !customMode();
   $('#transcript').hidden = t !== 'transcript';
+  // 지금 보이는 탭을 복사한다는 걸 버튼 이름으로 알린다
+  const what = t === 'transcript' ? '대화록 ' : '';
+  $('#copyMd').textContent = `${what}마크다운 복사`;
+  $('#copyNotion').textContent = `${what}노션용 복사`;
 }
 const minutesAsMd = notion => customMode() ? htmlToMd($('#customDoc')) : minutesMd(notion);
 $$('[data-tab]').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
@@ -754,7 +784,7 @@ ${taskLines}
 }
 const cellMd = s => s.replace(/\|/g, '\\|');
 function transcriptMd() {
-  return `# ${$('#docTitle').value.trim()} 대화록\n\n` + job.segments.map(s => `**${speakerName(s.who)}**${s.noTime ? '' : ` \`${timeLabel(s)}\``}  \n${s.text}\n`).join('\n');
+  return `# ${$('#docTitle').value.trim()} 대화록\n\n- 일시: ${$('#pDate').textContent.trim()}\n- 참석자: ${$('#pPeople').textContent.trim()}\n\n` + job.segments.map(s => `**${speakerName(s.who)}**${s.noTime ? '' : ` \`${timeLabel(s)}\``}  \n${s.text}\n`).join('\n');
 }
 async function copy(text, msg) {
   try { await navigator.clipboard.writeText(text); toast(msg); }
@@ -768,8 +798,9 @@ async function copy(text, msg) {
 }
 const onTranscript = () => !$('#transcript').hidden;
 const docMd = notion => onTranscript() ? transcriptMd() : minutesAsMd(notion);
-$('#copyNotion').addEventListener('click', () => copy(docMd(true), '복사했습니다. 노션 페이지에 붙여넣으세요'));
-$('#copyMd').addEventListener('click', () => copy(docMd(false), '마크다운으로 복사했습니다'));
+const docName = () => onTranscript() ? '대화록을' : '회의록을';
+$('#copyNotion').addEventListener('click', () => copy(docMd(true), `${docName()} 복사했습니다. 노션 페이지에 붙여넣으세요`));
+$('#copyMd').addEventListener('click', () => copy(docMd(false), `${docName()} 마크다운으로 복사했습니다`));
 $('#customDoc').addEventListener('input', () => { dirty = true; });
 $('#newBtn').addEventListener('click', () => { job = null; resetUpload(); go('upload'); });
 
@@ -1036,3 +1067,4 @@ $('#customStyle').value = load(CUSTOM_STYLE_KEY) || '';
 renderCustomStyleBox();
 migrateTemplates();
 go(key() ? 'upload' : 'key');
+refreshModels();

@@ -90,6 +90,8 @@ fieldset.level legend{font-size:13px;font-weight:600;padding:0;margin-bottom:6px
 .prog li.run i{border-color:var(--accent);border-top-color:transparent;animation:spin 1s linear infinite}
 .prog li.fail i{background:var(--rec);border-color:var(--rec)}
 .prog small{color:var(--muted);font-family:var(--mono);font-size:12px}
+.prog .model{display:block;font-style:normal;color:var(--muted);font-family:var(--mono);font-size:11.5px;margin-top:1px}
+.prog .model:empty{display:none}
 .bar{height:6px;border-radius:99px;background:var(--sunk);overflow:hidden}
 .bar span{display:block;height:100%;background:var(--accent);width:0;transition:width .4s}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
