@@ -30,7 +30,8 @@ function makeRanges(duration) {
 function newJob(file, duration) {
   return {
     file, duration, ranges: makeRanges(duration), stats: [],
-    audio: null,     // 30분 넘는 녹음을 자르려고 브라우저에서 풀어둔 소리
+    audio: null,     // 브라우저에서 16kHz로 풀어둔 소리 (조각 wav를 만들 때 씀)
+    rawUpload: false, // 브라우저가 녹음을 못 풀어 원본 파일을 그대로 올리는 경우
     meta: {
       title: $('#mTitle').value.trim(), date: $('#mDate').value, people: splitPeople($('#mPeople').value), level: $('input[name=level]:checked').value,
       style: $('input[name=style]:checked')?.value || '발언자별',
@@ -192,7 +193,7 @@ function steps() {
   // 지금 쓰는(쓸) 모델. 받아쓰기 전용 모델을 못 쓰면 Flash-Lite, 정리는 Flash-Lite가 막히면 Flash로 바뀐다
   const m = models() || {};
   const tModel = job.noTranscribe || !m.transcribe ? m.lite : m.transcribe;
-  const list = multi ? [{ id: 'cut', label: '녹음 자르기', sub: `${job.ranges.length}조각 · 30분 이하씩` }] : [];
+  const list = job.rawUpload ? [] : [{ id: 'cut', label: multi ? '녹음 자르기' : '녹음 변환', sub: multi ? `${job.ranges.length}조각 · 30분 이하씩` : '16kHz 모노로 줄이기' }];
   job.ranges.forEach((r, i) => list.push({ id: 'r' + i, label: multi ? `받아쓰기 ${i + 1}/${job.ranges.length}` : '받아쓰기', sub: r.e ? `${clock(r.s)}–${clock(r.e)}` : (job.file.size / 1048576).toFixed(1) + ' MB', model: r.model || tModel }));
   list.push({ id: 'min', label: '회의록 정리', sub: '주제·논의·결론·Task', model: job.summaryModel || m.lite || m.summary });
   return list;
@@ -244,11 +245,16 @@ async function run() {
     renderSlowNotice();
     renderProg(running);
 
-    // 30분 넘는 녹음은 브라우저에서 풀어 조각으로 자른다
-    if (job.ranges.length > 1 && !job.audio && job.ranges.some(r => !r.done)) {
+    // 녹음은 브라우저에서 16kHz 모노 wav로 바꿔 올린다(30분 넘으면 조각으로 자름).
+    // 휴대폰 녹음 m4a를 그대로 올리면 Google 쪽 받아쓰기가 몇 분씩 걸리는 파일이 있었다(같은 녹음을 wav로 바꾸면 수십 초).
+    if (!job.audio && !job.rawUpload && job.ranges.some(r => !r.done)) {
       running.add('cut'); renderProg(running);
       try { job.audio = await decodeAudio(job.file); }
-      catch (e) { throw new ApiError(400, `브라우저가 이 녹음을 풀지 못해 30분 단위로 자를 수 없습니다. 녹음 앱에서 mp3로 내보내 다시 올려주세요. (${e.message})`); }
+      catch (e) {
+        if (job.ranges.length > 1) throw new ApiError(400, `브라우저가 이 녹음을 풀지 못해 30분 단위로 자를 수 없습니다. 녹음 앱에서 mp3로 내보내 다시 올려주세요. (${e.message})`);
+        console.log('[회의록] 녹음을 풀지 못해 원본 파일을 그대로 올립니다', e.message);
+        job.rawUpload = true;
+      }
       running.delete('cut');
     }
 
@@ -294,7 +300,7 @@ async function pool(items, limit, fn) {
 async function transcribeRange(i, m) {
   const r = job.ranges[i];
   const multi = job.ranges.length > 1;
-  const file = multi ? wavPiece(job.audio, r.s, r.e, `piece${i + 1}.wav`) : job.file;
+  const file = job.audio ? wavPiece(job.audio, r.s, r.e || job.audio.duration, `piece${i + 1}.wav`) : job.file;
   setSub('r' + i, '올리는 중');
   const remote = await withRetry(() => uploadFile(key(), file, p => setSub('r' + i, `올리는 중 ${Math.round(p * 100)}%`)), onWait);
   try {
@@ -303,8 +309,13 @@ async function transcribeRange(i, m) {
     let segs = null;
     if (m.transcribe && !job.noTranscribe) {
       try {
-        const raw = await withRetry(() => transcribeAudio(key(), m.transcribe, remote, { onStats: st => addStat(`${label} (${m.transcribe})`, st) }), onWait);
-        segs = withTimes(raw, r);
+        // 받아쓰기 전용 모델은 끝나야 한꺼번에 돌려주므로, 멈춘 게 아니라는 걸 경과 초로 보여준다
+        const t0 = Date.now();
+        const tick = setInterval(() => setSub('r' + i, `받아쓰는 중 · ${Math.round((Date.now() - t0) / 1000)}초`), 1000);
+        try {
+          const raw = await withRetry(() => transcribeAudio(key(), m.transcribe, remote, { onStats: st => addStat(`${label} (${m.transcribe})`, st) }), onWait);
+          segs = withTimes(raw, r);
+        } finally { clearInterval(tick); }
       } catch (e) {
         if (!(e instanceof ApiError) || !(e.modelUnavailable || e.dailyQuota)) throw e;
         console.log('[회의록] 받아쓰기 전용 모델을 쓸 수 없어 Flash-Lite로 받아씁니다', e.message);
