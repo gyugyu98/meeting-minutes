@@ -7,7 +7,9 @@ class ApiError extends Error {
     this.status = status;
     this.raw = raw || '';
   }
-  get invalidKey() { return this.status === 400 && /API_KEY_INVALID|API key not valid/i.test(this.raw) || this.status === 403; }
+  get invalidKey() { return this.status === 400 && /API_KEY_INVALID|API key not valid/i.test(this.raw) || this.status === 401 || this.status === 403; }
+  // 새 형식(AQ.) 키를 일부 계정에서 거절하는 경우
+  get tokenTypeUnsupported() { return this.status === 401 && /ACCESS_TOKEN_TYPE_UNSUPPORTED/i.test(this.raw); }
   get dailyQuota() { return this.status === 429 && /PerDay/i.test(this.raw); }
   get rateLimited() { return this.status === 429 && !this.dailyQuota; }
   get transient() { return this.status >= 500 || this.status === 0; }

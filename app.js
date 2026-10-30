@@ -74,7 +74,8 @@ function renderKey() {
 $('#saveKey').addEventListener('click', async () => {
   const v = $('#apiKey').value.trim();
   if (!v) return toast('키를 붙여넣어 주세요');
-  if (!v.startsWith('AIza')) return toast('Gemini 키는 AIza로 시작합니다. 복사가 잘 됐는지 확인해 주세요');
+  // 예전 키는 AIza…, 요즘 AI Studio가 새로 주는 키는 AQ.… 로 시작한다
+  if (!/^(AIza|AQ\.)/.test(v)) return toast('Gemini 키는 AIza 또는 AQ. 로 시작합니다. 복사가 잘 됐는지 확인해 주세요');
   const btn = $('#saveKey');
   btn.disabled = true; btn.textContent = '키 확인 중…';
   try {
@@ -84,7 +85,8 @@ $('#saveKey').addEventListener('click', async () => {
     renderKey(); go('upload'); renderSlowNotice();
     toast(m.transcribe ? '키를 확인했습니다' : '키를 확인했습니다. 받아쓰기 전용 모델이 없어 Flash-Lite로 받아씁니다');
   } catch (e) {
-    toast(e instanceof ApiError && e.invalidKey ? '키가 올바르지 않습니다. AI Studio에서 다시 복사해 주세요' : `키를 확인하지 못했습니다: ${e.message}`);
+    toast(e instanceof ApiError && e.tokenTypeUnsupported ? 'Google이 이 형식(AQ.)의 키를 받아주지 않았습니다. AI Studio에서 키를 새로 만들어 보거나, 예전에 받은 AIza 키가 있으면 그 키를 넣어주세요'
+      : e instanceof ApiError && e.invalidKey ? '키가 올바르지 않습니다. AI Studio에서 다시 복사해 주세요' : `키를 확인하지 못했습니다: ${e.message}`);
   } finally {
     btn.disabled = false; btn.textContent = '저장하고 시작';
   }
